@@ -13,7 +13,7 @@ main:
 ; INS: toggle insert mode?
 
 ; get args
-; get filename from 2nd arg
+; get filename from 2nd arg https://en.wikipedia.org/wiki/Program_Segment_Prefix
 ; load file into memory (up to 32k - that's 1/2 a segment (?)))
 ; draw N-1 lines of the file (what happens if > 80 chars? punt)
 ; draw status line (filename, dirty, mode)
@@ -49,7 +49,7 @@ main:
 
   ; output the $-terminated string
   mov ah, 9
-  mov dx, CONST_1
+  mov dx, TITLE
   int 0x21 
 
   ; box cursor
@@ -148,10 +148,7 @@ notf:
 
   ; update cursor location
 updatecursor:
-  mov ah, 2
-  xor bx, bx
   mov dl, [x] ; column
-
   cmp dl, 80
   jne goodcursor1
   mov byte [x], 0
@@ -173,6 +170,8 @@ goodcursor2:
   jmp updatecursor
 
 goodcursor3:
+  mov ah, 2
+  xor bx, bx
   int 0x10
   jmp waiting
 
@@ -188,7 +187,7 @@ end:
   ret
 
 section .data:
-  CONST_1: db "Smoled", 10, "$", 0
+  TITLE: db "Smoled$", 0
 
   ; physical cursor location on screen
   x: db 0  ; 0-79
