@@ -1,2 +1,3 @@
 # asm
-Assembly language code for x86 DOS computers
+
+Assembly language programs for x86 DOS computers.
