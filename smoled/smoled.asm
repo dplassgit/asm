@@ -1,12 +1,18 @@
+; to build:
+; nasm -fbin smoled.asm -o smoled.com
+
+
+; Design thoughts:
+
 ; Whenever a char is typed, the rest of the text needs to be moved down and the new char inserted at the location.
 
 ; Need to update the screen after every character.
 ; We know which physical row we're on and which physical column we're at.
-; We (should) know what offset into the text we're at. (which needs to update on every cursor movement)
-; So, draw all characters from current char to newline (or EOF) mapping starting at current physical column & row.
+; We (should) know what offset into the text we're at (which needs to update on every cursor movement).
+; So, draw all characters from the current character to newline (or EOF) mapping starting at current physical column & row.
 
 ; If inserting a newline, need to
-; 1 Clear rest of current physical line
+; 1 Clear rest of the current physical line
 ; 2 Redraw all lines from next line to end of page
 
 ; should write a subroutine to do the above, which would
@@ -16,7 +22,6 @@
 
 org 0x0100
 
-main:
 
 ; what shall it do?
 ; full screen
@@ -47,9 +52,9 @@ main:
 
 
   ; clear screen
-  xor ax, ax
-  mov ah, 0x06 ; 0x06 is scroll; al=0 = clear screen
-  mov bh, 0x07  ; attribute 0111=gray
+  mov al, 0
+  mov ah, 6 ; 0x06 is scroll; al=0 = clear screen
+  mov bh, 0x0f  ; attribute f=bright white, for the TITLE
   xor cx, cx  ; cl,ch=window upper left corner
   mov dh, 24 ; dl,dh=window lower right corner
   mov dl, 79
@@ -83,20 +88,20 @@ main:
   int 0x10
 
   xor ax, ax
-  push ax
+  push ax  ; fake the last key. why do I do this to myself?
 
 save:
   ; TODO: update status line
   mov byte [dirty], 0
 
 waiting:
-  pop ax
+  pop ax  ; this is the last key
   mov byte [lastkey], al
 
   ; get char
   mov ah, 7
   int 0x21
-  push ax
+  push ax  ; push the last key
   ; al has char
 
   ;cmp al, 19 ; ctrl+s / save
@@ -109,8 +114,21 @@ waiting:
   je end
   ; dirty, but if we hit ctrl-q 2x in a row, still end
   cmp al, [lastkey]
-  je end
+  jne notq
+
   ; fall through
+
+end:
+  pop ax
+  ; restore cursor
+  mov ch, 6
+  mov cl, 7
+  mov ah, 1
+  int 0x10
+
+  int 0x20   ; back to o/s
+  ret
+
 
 notq:
   cmp al, 1  ; ctrl+a
@@ -161,9 +179,10 @@ notf:
   ; write the char in al at the current location
   ; TODO: insert the char at al at the current offset, and redraw the line from this x location to the EOL.
   mov bh, 0
-  mov ah, 0x0a
+  mov bl, 7
+  mov ah, 9
   mov cx, 1
-  int 0x10
+  int 0x10  ; write char and attribute
 
   mov byte [dirty], 1
 
@@ -220,11 +239,11 @@ drawtext:
   mov ah, 2
   int 0x10
 
-  mov si, 0 ; relative offset into 'text'
+  mov si, text ; offset into 'text'
   mov dh, 0 ; row
   mov dl, 0 ; column
 .loop:
-  mov al, [si+text]  ; get next character
+  mov al, [si]  ; get next character
   inc si
   cmp al, 0 ; eof
   je .done
@@ -233,7 +252,6 @@ drawtext:
 
   ; put al at current location
   ; move to current location
-  ;push dx
   mov ah, 2
   ; dh, dl already set
   int 0x10
@@ -243,7 +261,6 @@ drawtext:
   mov cx, 1
   mov ah, 9
   int 0x10
-  ;pop dx
 
   ; go to next column in this line
   inc dl
@@ -258,16 +275,8 @@ drawtext:
 
 .done: ret
 
-end:
-  ; restore cursor
-  mov ch, 6
-  mov cl, 7
-  mov ah, 1
-  int 0x10
-
-  int 0x20   ; back to o/s
-
-section .data:
+;; DATA HERE:
+; segment .data - not needed since this is built as a com file
   TITLE: db "Smoled$", 0
 
   ; physical cursor location on screen
@@ -288,51 +297,48 @@ section .data:
   textlength: dw 0	 ; length of the text
   ; 24 lines x 80 rows, kind of draconian
   ; text: times 1920 db 0
-  text: db  \
-    'Four score and seven years ago our fathers brought forth on this continent. ', 10,  \
-    'a new nation, conceived in Liberty, and dedicated to the proposition that ', 10, \
-    'all men are created equal.', 10,  10, \
-    'Now we are engaged in a great civil war, testing whether that nation, or any ', 10, \
-    'nation so conceived and so dedicated, can long endure. We are met on a great ', 10,  \
-    'battle-field of that war. We have come to dedicate a portion of that field, ', 10, \
-    'as a final resting place for those who here gave their lives that that nation ', 10, \
-    'might live. It is altogether fitting and proper that we should do this.', 10, 10, \
-    'But, in a larger sense, we can not dedicate -- we can not consecrate -- we ', 10, \
-    'can not hallow -- this ground. The brave men, living and dead, who struggled ', 10, \
-    'here, have consecrated it, far above our poor power to add or detract. ', 10, \
-    '... It is rather for us to be here dedicated to the great task ', 10, \
-    'remaining before us -- that from these honored dead we take increased ', 10, \
-    'devotion to that cause for which they gave the last full measure of devotion ', 10, \
-    '-- that we here highly resolve that these dead shall not have died in vain -- ', 10, \
-    'that this nation, under God, shall have a new birth of freedom -- and that ', 10, \
-    'government of the people, by the people, for the people, shall not perish from ', 10, \
-    'the earth.', 10, 0
+  text: db  "Four score and seven years ago our fathers brought forth on this continent.", 10, "a new nation, conceived in Liberty, and dedicated to the proposition that ", 10, "all men are created equal.", 10,  0
+    ;"Now we are engaged in a great civil war, testing whether that nation, or any ", 10, \
+    ;"nation so conceived and so dedicated, can long endure. We are met on a great ", 10, \
+    ;"battle-field of that war. We have come to dedicate a portion of that field, ", 10, \
+    ;"as a final resting place for those who here gave their lives that that nation ", 10, \
+    ;"might live. It is altogether fitting and proper that we should do this.", 10, 10, \
+    ;"But, in a larger sense, we can not dedicate -- we can not consecrate -- we ", 10, \
+    ;"can not hallow -- this ground. The brave men, living and dead, who struggled ", 10, \
+    ;"here, have consecrated it, far above our poor power to add or detract. ", 10, \
+    ;"... It is rather for us to be here dedicated to the great task ", 10, \
+    ;"remaining before us -- that from these honored dead we take increased ", 10, \
+    ;"devotion to that cause for which they gave the last full measure of devotion ", 10, \
+    ;"-- that we here highly resolve that these dead shall not have died in vain -- ", 10, \
+    ;"that this nation, under God, shall have a new birth of freedom -- and that ", 10, \
+    ;"government of the people, by the people, for the people, shall not perish from ", 10, \
+    ;"the earth.", 10, 0
 
   filename: times 13 db 0	; 8.3
 
 
 
-;
-;; draw starting from offset at x, y to the EOL
-;Drawline:
-;  ret
-;
-;
-;; move everything down one byte so we can insert a character at the current location
-;Insertchar:
-;  ; TODO: detect overflow
-;  Inc word [textlength]
-;
-;  ; for dx = offset+1; i < textlength; ++i
-;  ;   text[i] = text[i-1]
-;  Mov dx, [offset]
-;.Loop:
-;  Inc dx
-;  Cmp dx, [textlength]
-;  Je .done
-;  Mov cl, [dx]
-;  Mov [dx+1], cl  ; will this work?
-;  Jmp .loop
-;.done
-;  Ret
-;
+  ;
+  ;; draw starting from offset at x, y to the EOL
+  ;Drawline:
+  ;  ret
+  ;
+  ;
+  ;; move everything down one byte so we can insert a character at the current location
+  ;Insertchar:
+  ;  ; TODO: detect overflow
+  ;  Inc word [textlength]
+  ;
+  ;  ; for dx = offset+1; i < textlength; ++i
+  ;  ;   text[i] = text[i-1]
+  ;  Mov dx, [offset]
+  ;.Loop:
+  ;  Inc dx
+  ;  Cmp dx, [textlength]
+  ;  Je .done
+  ;  Mov cl, [dx]
+  ;  Mov [dx+1], cl  ; will this work?
+  ;  Jmp .loop
+  ;.done
+  ;  Ret
+  ;

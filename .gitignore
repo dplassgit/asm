@@ -2,3 +2,6 @@ bazel-bin/
 bazel-out/
 bazel-asm/
 bazel-testlogs/
+*.exe
+*.com
+*.lst

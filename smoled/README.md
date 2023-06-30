@@ -19,5 +19,5 @@ Left: ctrl+b
 Right: ctrl+f
 Start of line: ctrl+a
 End of line: ctrl+e
-Quot: ctrl+q (twice)
+Quit: ctrl+q (twice)
 ```
