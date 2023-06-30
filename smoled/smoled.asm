@@ -1,7 +1,7 @@
 ; Whenever a char is typed, the rest of the text needs to be moved down and the new char inserted at the location.
 
-; Need to update the screen after every character. 
-; We know which physical row we're on and which physical column we're at. 
+; Need to update the screen after every character.
+; We know which physical row we're on and which physical column we're at.
 ; We (should) know what offset into the text we're at. (which needs to update on every cursor movement)
 ; So, draw all characters from current char to newline (or EOF) mapping starting at current physical column & row.
 
@@ -51,27 +51,30 @@ main:
   mov ah, 0x06 ; 0x06 is scroll; al=0 = clear screen
   mov bh, 0x07  ; attribute 0111=gray
   xor cx, cx  ; cl,ch=window upper left corner
-  mov dh, 23; dl,dh=window lower right corner
+  mov dh, 24 ; dl,dh=window lower right corner
   mov dl, 79
   int 0x10
 
   ; set cursor to bottom of screen
   mov ah, 2
   xor bx, bx
-  mov dl, 20
+  mov dl, 37
   mov dh, 24
   int 0x10
 
   ; output the $-terminated string
   mov ah, 9
   mov dx, TITLE
-  int 0x21 
+  int 0x21
 
   ; box cursor
   mov ch, 0
   mov cl, 7
   mov ah, 1
   int 0x10
+
+  ; draw the whole text.
+  call drawtext
 
   ; move cursor to top of screen
   mov ah, 2
@@ -132,7 +135,7 @@ notn:
   jne notp
   dec byte [y]
   ; fall through
- 
+
 notp:
   cmp al, 2  ; ctrl-b / back one char
   jne notb
@@ -150,7 +153,7 @@ notf:
 
   ; TEMPORARY: write visible chars to the screen at the current location
   ; only write it if it's a "visible" character
-  cmp al, 32 
+  cmp al, 32
   jl updatecursor
   cmp al, 127
   jge updatecursor
@@ -200,7 +203,7 @@ goodcursor3:
   jmp updatecursor
 
 goodcursor4:
-  ; TODO: update offset into text
+  ; TODO: calculate offset into text
 
   mov ah, 2
   xor bx, bx
@@ -208,6 +211,52 @@ goodcursor4:
 
   jmp waiting
 
+
+; draw the whole text starting at the top of the screen.
+drawtext:
+  ; move to top of screen
+  xor bx, bx
+  xor dx, dx
+  mov ah, 2
+  int 0x10
+
+  mov si, 0 ; relative offset into 'text'
+  mov dh, 0 ; row
+  mov dl, 0 ; column
+.loop:
+  mov al, [si+text]  ; get next character
+  inc si
+  cmp al, 0 ; eof
+  je .done
+  cmp al, 10 ; newline
+  je .newline
+
+  ; put al at current location
+  ; move to current location
+  ;push dx
+  mov ah, 2
+  ; dh, dl already set
+  int 0x10
+
+  ; put char
+  mov bx, 7 ; gray
+  mov cx, 1
+  mov ah, 9
+  int 0x10
+  ;pop dx
+
+  ; go to next column in this line
+  inc dl
+
+  jmp .loop
+
+.newline:
+  ; set cursor to next line
+  inc dh
+  mov dl, 0
+  Jmp .loop
+
+.done: ret
 
 end:
   ; restore cursor
@@ -237,44 +286,32 @@ section .data:
   dirty: db 0
 
   textlength: dw 0	 ; length of the text
-  ; 23 lines x 80 rows, kind of draconian
-;  text: times 1841 db 0
+  ; 24 lines x 80 rows, kind of draconian
+  ; text: times 1920 db 0
+  text: db  \
+    'Four score and seven years ago our fathers brought forth on this continent. ', 10,  \
+    'a new nation, conceived in Liberty, and dedicated to the proposition that ', 10, \
+    'all men are created equal.', 10,  10, \
+    'Now we are engaged in a great civil war, testing whether that nation, or any ', 10, \
+    'nation so conceived and so dedicated, can long endure. We are met on a great ', 10,  \
+    'battle-field of that war. We have come to dedicate a portion of that field, ', 10, \
+    'as a final resting place for those who here gave their lives that that nation ', 10, \
+    'might live. It is altogether fitting and proper that we should do this.', 10, 10, \
+    'But, in a larger sense, we can not dedicate -- we can not consecrate -- we ', 10, \
+    'can not hallow -- this ground. The brave men, living and dead, who struggled ', 10, \
+    'here, have consecrated it, far above our poor power to add or detract. ', 10, \
+    '... It is rather for us to be here dedicated to the great task ', 10, \
+    'remaining before us -- that from these honored dead we take increased ', 10, \
+    'devotion to that cause for which they gave the last full measure of devotion ', 10, \
+    '-- that we here highly resolve that these dead shall not have died in vain -- ', 10, \
+    'that this nation, under God, shall have a new birth of freedom -- and that ', 10, \
+    'government of the people, by the people, for the people, shall not perish from ', 10, \
+    'the earth.', 10, 0
 
   filename: times 13 db 0	; 8.3
 
 
 
-; draw the whole text starting at the top of the screen.
-;Drawtext:
-;  ; move to top of screen
-;  mov ah, 2
-;  xor bx, bx
-;  xor dx, dx
-;  int 0x10
-;
-;  Mov si, 0 ; relative offset into 'text'
-;  Mov bl, 0 ; row
-;  Mov bh, 0 ; column
-;drawloop:
-;  Mov cl, [si+text]  ; char - will this work?
-;  Cmp cl, 0 ; eof
-;  Je drawloopdone
-;  Cmp cl, 13 ; newline
-;  Je drawnewline
-;
-;  ; TODO: put cl at current location
-;  ; go to next location (is this free?)
-; 
-;  Jmp drawloop
-;
-;Drawnewline:
-;  ; set cursor to next line  
-;  Inc bl
-;  ; TODO: move to beginning of line 'bl'
-;  Jmp drawloop 
-;
-;Drawloopdone:
-;  Ret
 ;
 ;; draw starting from offset at x, y to the EOL
 ;Drawline:
