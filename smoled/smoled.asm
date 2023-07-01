@@ -4,11 +4,7 @@
 
 ; Design thoughts:
 
-; Whenever a char is typed, the rest of the text needs to be moved down and the new char inserted at the location.
-
 ; Need to update the screen after every character.
-; We know which physical row we're on and which physical column we're at.
-; We (should) know what offset into the text we're at (which needs to update on every cursor movement).
 ; So, draw all characters from the current character to newline (or EOF) mapping starting at current physical column & row.
 
 ; If inserting a newline, need to
@@ -17,7 +13,6 @@
 
 ; should write a subroutine to do the above, which would
 ; be usable for initial drawing
-
 
 
 org 0x0100
@@ -32,21 +27,8 @@ org 0x0100
 ;  cmp   bl,0x00
 ;  je   exit      ; not allowed to have a zero-length
 ;
-;  ; find the space
-;  Mov cl, 0
-;Loop:
-;  Cmp [cl+0x81], ' '  ;; wil this even work?
-;  Je space
-;  Inc cl
-;  Cmp cl, bl
-;  Jne loop
-;
-;Space:
-;  ; copy next at most 11 chars to "filename" but what about spaces?
 
 ; load file into memory (up to 2k - screen only)
-
-; draw lines of the file
 
 ; draw status line (filename, dirty, mode)
 
@@ -54,8 +36,7 @@ org 0x0100
   ; clear screen
   mov al, 0
   mov ah, 6 ; 0x06 is scroll; al=0 = clear screen
-  ;mov bh, 0x0f  ; attribute f=bright white, for the TITLE
-  mov bh, 0x07
+  mov bh, 0x0f  ; attribute f=bright white, for the TITLE
   xor cx, cx  ; cl,ch=window upper left corner
   mov dh, 24 ; dl,dh=window lower right corner
   mov dl, 79
@@ -69,12 +50,6 @@ org 0x0100
   int 0x10
 
   ; output the $-terminated string
-  mov al, ' ' ; thi sisn't working,... only sets the first character as bright white...
-  mov bl, 0x0f ; set attribute to bright white
-  mov ah, 9
-  mov cx, 1
-  int 0x10
-
   mov ah, 9
   mov dx, TITLE
   int 0x21
@@ -117,32 +92,32 @@ waiting:
   mov ah, 2
   int 0x10
 
-  pop ax
+  pop ax   ; last key
   mov byte [lastkey], al
 
   ; get char into al
   mov ah, 7
   int 0x21
-  push ax
+  push ax  ; save it
 
-  ;cmp al, 19 ; ctrl+s / save
-  ;jne nots
+  cmp al, 19 ; ctrl+s / save
+  jne nots
+  call save_file
+  mov byte [dirty], 0
+  jmp updatecursor
 
 nots:
   cmp al, 17 ; ctrl+q / quit
   jne notq
   ; if clean, just quit
   cmp byte [dirty], 0
-  je end
+  je really_quit
   ; dirty, but if we hit ctrl-q 2x in a row, still end
   cmp al, [lastkey]
   jne notq
 
   ; fall through:
-
-  ; really quit
-
-end:
+really_quit:
   ; restore cursor
   mov ch, 6
   mov cl, 7
@@ -151,7 +126,6 @@ end:
 
   int 0x20   ; back to o/s
   ret
-
 
 notq:
   cmp al, 1  ; ctrl+a
@@ -205,8 +179,9 @@ notf:
 
   ; TEMPORARY: write the char in al at the current location
   mov di, [offset]
-  mov byte [di], al
+  mov [di], al
 
+  ; NOTE: this is slow on hardware, but fast on Win10
   call draw_all
 
   ; go to next cursor location
@@ -215,6 +190,7 @@ notf:
   ; fall through:
 
 notprintable:
+
 ; update cursor location
 updatecursor:
   mov dl, [x] ; column
@@ -245,8 +221,6 @@ goodcursor3:
   jmp updatecursor
 
 goodcursor4:
-  ;mov dh, [y] ; row
-  ;mov dl, [x] ; column
   xor bx, bx
   mov ah, 2
   int 0x10   ; update the cursor location on the screen
@@ -275,11 +249,11 @@ xy_to_offset:
   xor dx, dx  ; dl=x, dh=y
   mov si, text
 .loop:
-	mov cl, [si] ; char = text[i]
-	;If tx==x and ty ==y	// x, y are globals representing our physical location. ooh, we might be able to deal with scrolling here
-  cmp dl, [x] 
+  mov cl, [si] ; char = text[i]
+  ;If tx==x and ty ==y	// x, y are globals representing our physical location. ooh, we might be able to deal with scrolling here
+  cmp dl, [x]
   jne .nothere
-  cmp dh, [y] 
+  cmp dh, [y]
   jne .nothere
 
   ; found it!
@@ -299,7 +273,7 @@ xy_to_offset:
 	mov dl, 0 ; clear column
 	inc dh    ; next line
 .next:
-  inc si
+  inc si  ; next character in text
   jmp .loop
 
 .done:
@@ -364,11 +338,50 @@ insert_char:
   dec bx
   jmp .loop
 
-.done
+.done:
   ; TODO: detect overflow
   inc word [textlength]
   ret
 
+
+; calculate the end of text, returned in di
+get_text_end:
+  mov di, text
+.loop:
+  mov cl, [di]
+  inc di
+  cmp cl, 0
+  jne .loop
+  dec di
+  ret
+
+save_file:
+  xor cx, cx   ; 0=write normal file
+  mov dx, filename
+  mov ah, 0x3c
+  int 0x21   ; open file for write, handle in ax
+  jc .error
+
+  call get_text_end
+  sub di, text  ; subtract start of text
+  mov cx, di   ; length in cx
+
+  ; ax has file handle, needs to be in bx
+  mov bx, ax
+  mov dx, text
+  mov ah, 0x40
+  int 0x21
+  jc .error
+
+  ; close file, handle still in bx
+  mov ah, 0x3e
+  int 0x21
+  jc .error
+  ret
+
+.error:
+  int 0x20   ; back to o/s
+  ret
 
 
 ; DATA HERE:
@@ -382,7 +395,7 @@ insert_char:
   ; what line of the file is the top line shown?
   ; top: db 0 this will be for scrolling, not v1
 
-  ; location of cursor in text
+  ; absolute location of cursor in text
   offset: dw 0
 
   ; last key hit
@@ -390,7 +403,7 @@ insert_char:
 
   dirty: db 0
 
-  textlength: dw 40	 ; length of the text
+  textlength: dw 0	 ; length of the text
   ; 24 lines x 80 rows, kind of draconian
   ; text: times 1920 db 0
   text: db  "Four score and seven years ago our fathers brought forth on this continent.", 10, "a new nation, conceived in Liberty, and dedicated to the proposition that ", 10, "all men are created equal.", 10,  0
@@ -411,5 +424,5 @@ insert_char:
     ;"the earth.", 10, 0
 
 
-  filename: times 13 db 0	; 8.3
+  filename: db "SMOLED.TXT", 0 ; times 13 db 0	; 8.3
 
