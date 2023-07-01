@@ -54,7 +54,8 @@ org 0x0100
   ; clear screen
   mov al, 0
   mov ah, 6 ; 0x06 is scroll; al=0 = clear screen
-  mov bh, 0x0f  ; attribute f=bright white, for the TITLE
+  ;mov bh, 0x0f  ; attribute f=bright white, for the TITLE
+  mov bh, 0x07
   xor cx, cx  ; cl,ch=window upper left corner
   mov dh, 24 ; dl,dh=window lower right corner
   mov dl, 79
@@ -68,6 +69,12 @@ org 0x0100
   int 0x10
 
   ; output the $-terminated string
+  mov al, ' ' ; thi sisn't working,... only sets the first character as bright white...
+  mov bl, 0x0f ; set attribute to bright white
+  mov ah, 9
+  mov cx, 1
+  int 0x10
+
   mov ah, 9
   mov dx, TITLE
   int 0x21
@@ -78,35 +85,50 @@ org 0x0100
   mov ah, 1
   int 0x10
 
-  ; draw the whole text.
-  call drawtext
+  ; calculate offset into text; sets cl to THE character
+  call xy_to_offset
 
-  ; move cursor to top of screen
+  ; move to status line
   mov ah, 2
   xor bx, bx
-  xor dx, dx
+  mov dl, 0 ; bottom left
+  mov dh, 24
   int 0x10
 
-  xor ax, ax
-  push ax  ; fake the last key. why do I do this to myself?
+  ; set character
+  mov bh, 0
+  mov bl, 4  ; bright red
+  mov al, cl   ; character to print
+  mov cx, 1
+  mov ah, 9
+  int 0x10  ; write char and attribute
 
-save:
-  ; TODO: update status line
-  mov byte [dirty], 0
+  ; draw the whole text.
+  call draw_all
+
+  xor ax, ax
+  push ax  ; preset the lastkey
 
 waiting:
-  pop ax  ; this is the last key
+  ; update the cursor location on the screen
+  mov dh, [y] ; row
+  mov dl, [x] ; column
+  xor bx, bx
+  mov ah, 2
+  int 0x10
+
+  pop ax
   mov byte [lastkey], al
 
-  ; get char
+  ; get char into al
   mov ah, 7
   int 0x21
-  push ax  ; push the last key
-  ; al has char
+  push ax
 
   ;cmp al, 19 ; ctrl+s / save
-  ;je save
+  ;jne nots
 
+nots:
   cmp al, 17 ; ctrl+q / quit
   jne notq
   ; if clean, just quit
@@ -116,10 +138,11 @@ waiting:
   cmp al, [lastkey]
   jne notq
 
-  ; fall through
+  ; fall through:
+
+  ; really quit
 
 end:
-  pop ax
   ; restore cursor
   mov ch, 6
   mov cl, 7
@@ -169,29 +192,29 @@ notb:
 notf:
   ; TODO: process backspace (ctrl-h) delete (chr 127?), newline (ctrl-m)
 
-  ; TEMPORARY: write visible chars to the screen at the current location
-  ; only write it if it's a "visible" character
+  ; detect if  printable: if ascii 32 to 126
   cmp al, 32
-  jl updatecursor
+  jl notprintable
   cmp al, 127
-  jge updatecursor
-
-  ; write the char in al at the current location
-  ; TODO: insert the char at al at the current offset, and redraw the line from this x location to the EOL.
-  mov bh, 0
-  mov bl, 7
-  mov ah, 9
-  mov cx, 1
-  int 0x10  ; write char and attribute
+  jge notprintable
 
   mov byte [dirty], 1
 
+  ; insert the char at al at the current offset, and redraw the line from this x location to the EOL.
+  ;call insert_char
+
+  ; TEMPORARY: write the char in al at the current location
+  mov di, [offset]
+  mov byte [di], al
+
+  call draw_all
+
   ; go to next cursor location
-  ; TODO: write into memory.
   inc byte [x]
 
   ; fall through:
 
+notprintable:
 ; update cursor location
 updatecursor:
   mov dl, [x] ; column
@@ -222,26 +245,70 @@ goodcursor3:
   jmp updatecursor
 
 goodcursor4:
-  ; TODO: calculate offset into text
+  ;mov dh, [y] ; row
+  ;mov dl, [x] ; column
+  xor bx, bx
+  mov ah, 2
+  int 0x10   ; update the cursor location on the screen
 
+  call xy_to_offset
+
+  ; move to status line
   mov ah, 2
   xor bx, bx
-  int 0x10   ; update the cursor location on the screen
+  mov dl, 0 ; bottom left
+  mov dh, 24
+  int 0x10
+
+  ; set character
+  mov bh, 0
+  mov bl, 4  ; bright red
+  mov al, cl   ; character to print
+  mov cx, 1
+  mov ah, 9
+  int 0x10  ; write char and attribute
 
   jmp waiting
 
 
-; draw the whole text starting at the top of the screen.
-drawtext:
-  ; move to top of screen
-  xor bx, bx
-  xor dx, dx
-  mov ah, 2
-  int 0x10
+xy_to_offset:
+  xor dx, dx  ; dl=x, dh=y
+  mov si, text
+.loop:
+	mov cl, [si] ; char = text[i]
+	;If tx==x and ty ==y	// x, y are globals representing our physical location. ooh, we might be able to deal with scrolling here
+  cmp dl, [x] 
+  jne .nothere
+  cmp dh, [y] 
+  jne .nothere
 
-  mov si, text ; offset into 'text'
-  mov dh, 0 ; row
-  mov dl, 0 ; column
+  ; found it!
+  mov [offset], si
+  ret
+
+.nothere:
+  cmp cl, 0
+  je .done  ; should be error, shrug.
+
+	cmp cl, 10 ; newline
+  je .newline
+  inc dl ; next column
+
+  jmp .next
+.newline:
+	mov dl, 0 ; clear column
+	inc dh    ; next line
+.next:
+  inc si
+  jmp .loop
+
+.done:
+  ret
+
+; draw the whole text starting at the top of the screen.
+draw_all:
+  mov si, text
+  xor dx, dx ; dh=row, dl=column
 .loop:
   mov al, [si]  ; get next character
   inc si
@@ -262,20 +329,49 @@ drawtext:
   mov ah, 9
   int 0x10
 
-  ; go to next column in this line
+  ; go to next column in this row
   inc dl
 
   jmp .loop
 
 .newline:
-  ; set cursor to next line
-  inc dh
+  ; set cursor to start of next row
   mov dl, 0
-  Jmp .loop
+  inc dh
+  jmp .loop
 
 .done: ret
 
-;; DATA HERE:
+
+; draw starting from offset at x, y to the EOL
+;draw_line:
+;  ret
+;
+;
+
+; move everything down one byte so we can insert a character at the current location
+insert_char:
+  mov si, [offset]
+  ; have to start at the end of the string, which we do not know.
+  ; THIS IS BROKEN
+  xor bx, bx
+
+.loop:
+  mov dl, [si+bx]
+  cmp dl, 0
+  mov [si+bx+1], dl
+  je .done
+  dec bx
+  jmp .loop
+
+.done
+  ; TODO: detect overflow
+  inc word [textlength]
+  ret
+
+
+
+; DATA HERE:
 ; segment .data - not needed since this is built as a com file
   TITLE: db "Smoled$", 0
 
@@ -286,7 +382,7 @@ drawtext:
   ; what line of the file is the top line shown?
   ; top: db 0 this will be for scrolling, not v1
 
-  ; *relative* location of cursor in text
+  ; location of cursor in text
   offset: dw 0
 
   ; last key hit
@@ -294,7 +390,7 @@ drawtext:
 
   dirty: db 0
 
-  textlength: dw 0	 ; length of the text
+  textlength: dw 40	 ; length of the text
   ; 24 lines x 80 rows, kind of draconian
   ; text: times 1920 db 0
   text: db  "Four score and seven years ago our fathers brought forth on this continent.", 10, "a new nation, conceived in Liberty, and dedicated to the proposition that ", 10, "all men are created equal.", 10,  0
@@ -314,31 +410,6 @@ drawtext:
     ;"government of the people, by the people, for the people, shall not perish from ", 10, \
     ;"the earth.", 10, 0
 
+
   filename: times 13 db 0	; 8.3
 
-
-
-  ;
-  ;; draw starting from offset at x, y to the EOL
-  ;Drawline:
-  ;  ret
-  ;
-  ;
-  ;; move everything down one byte so we can insert a character at the current location
-  ;Insertchar:
-  ;  ; TODO: detect overflow
-  ;  Inc word [textlength]
-  ;
-  ;  ; for dx = offset+1; i < textlength; ++i
-  ;  ;   text[i] = text[i-1]
-  ;  Mov dx, [offset]
-  ;.Loop:
-  ;  Inc dx
-  ;  Cmp dx, [textlength]
-  ;  Je .done
-  ;  Mov cl, [dx]
-  ;  Mov [dx+1], cl  ; will this work?
-  ;  Jmp .loop
-  ;.done
-  ;  Ret
-  ;
