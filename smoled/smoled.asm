@@ -1,5 +1,6 @@
 ; to build:
 ; nasm -fbin smoled.asm -o smoled.com
+; tinyasm -f bin smoled.asm -o smoled.com
 
 
 ; Design thoughts:
@@ -11,15 +12,21 @@
 ; 1 Clear rest of the current physical line
 ; 2 Redraw all lines from next line to end of page
 
-; should write a subroutine to do the above, which would
-; be usable for initial drawing
 
+; Issues/TODO:
+;  newlines (char 10) is insufficient on dos. it only linefeeds. needs CR (char 13)
+;    proposal: in memory it's always 10, but when saving it's 1310
+;  no load
+;  leaves screen in a weird state (bold)
+;  handle insert newline
+;  handle delete newline
+;  handle delete KEY
+;  after backspace, redrawing the line leaves extra text at the end of the line
+;  status line
+;  only insert
 
 org 0x0100
 
-
-; what shall it do?
-; full screen
 
 ; get filename from 2nd arg https://en.wikipedia.org/wiki/Program_Segment_Prefix
 ;  xor   bx,bx
@@ -93,7 +100,7 @@ waiting:
   int 0x10
 
   pop ax   ; last key
-  mov byte [lastkey], al
+  mov [lastkey], al
 
   ; get char into al
   mov ah, 7
@@ -165,8 +172,38 @@ notb:
 
 notf:
   ; TODO: process backspace (ctrl-h) delete (chr 127?), newline (ctrl-m)
+  cmp al, 8  ; backspace
+  jne noth
+  ; if x!=0 or y!=0, do backspace
+  cmp byte [x], 0
+  jne .dobackspace
+  cmp byte [y], 0
+  je noth
+  ; not at beginning. shuffle everything down
+.dobackspace:
+  call backspace
+  call draw_all
+  dec byte [x]
+  jmp updatecursor
 
-  ; detect if  printable: if ascii 32 to 126
+
+noth:
+  ;cmp al, 127 ; delete : UGH THIS IS NOT DELETE
+  cmp al, 4 ; ctrl-d
+  jne notdel
+  ; if x < 80, do delete
+  cmp byte [x], 79
+  je notdel
+  inc word [offset]
+  call backspace
+  call draw_all
+  jmp updatecursor
+
+
+notdel:
+  ; TODO: process newline (ctrl-m)
+
+  ; detect if printable: if ascii 32 to 126
   cmp al, 32
   jl notprintable
   cmp al, 127
@@ -175,9 +212,9 @@ notf:
   mov byte [dirty], 1
 
   ; insert the char at al at the current offset, and redraw the line from this x location to the EOL.
-  ;call insert_char
+  call insert_char
 
-  ; TEMPORARY: write the char in al at the current location
+  ; write the character
   mov di, [offset]
   mov [di], al
 
@@ -245,6 +282,17 @@ goodcursor4:
   jmp waiting
 
 
+; move from offset to end of text back one
+backspace:
+  mov di, [offset]
+.loop:
+  mov cl, [di]
+  mov [di-1], cl
+  inc di
+  cmp cl, 0
+  jne .loop
+  ret
+
 xy_to_offset:
   xor dx, dx  ; dl=x, dh=y
   mov si, text
@@ -279,10 +327,12 @@ xy_to_offset:
 .done:
   ret
 
+
 ; draw the whole text starting at the top of the screen.
 draw_all:
   mov si, text
   xor dx, dx ; dh=row, dl=column
+
 .loop:
   mov al, [si]  ; get next character
   inc si
@@ -309,38 +359,31 @@ draw_all:
   jmp .loop
 
 .newline:
+  ; TODO: erase to end of row
+
   ; set cursor to start of next row
   mov dl, 0
   inc dh
   jmp .loop
 
-.done: ret
+.done:
+  ret
 
-
-; draw starting from offset at x, y to the EOL
-;draw_line:
-;  ret
-;
-;
 
 ; move everything down one byte so we can insert a character at the current location
 insert_char:
-  mov si, [offset]
-  ; have to start at the end of the string, which we do not know.
-  ; THIS IS BROKEN
-  xor bx, bx
+  call get_text_end
+  ; di has end of text
 
 .loop:
-  mov dl, [si+bx]
-  cmp dl, 0
-  mov [si+bx+1], dl
+  cmp di, [offset]
   je .done
-  dec bx
+  mov cl, [di]
+  mov [di+1], cl
+  dec di
   jmp .loop
 
 .done:
-  ; TODO: detect overflow
-  inc word [textlength]
   ret
 
 
@@ -403,10 +446,10 @@ save_file:
 
   dirty: db 0
 
-  textlength: dw 0	 ; length of the text
   ; 24 lines x 80 rows, kind of draconian
   ; text: times 1920 db 0
   text: db  "Four score and seven years ago our fathers brought forth on this continent.", 10, "a new nation, conceived in Liberty, and dedicated to the proposition that ", 10, "all men are created equal.", 10,  0
+  buffer: times 1000 db 0
     ;"Now we are engaged in a great civil war, testing whether that nation, or any ", 10, \
     ;"nation so conceived and so dedicated, can long endure. We are met on a great ", 10, \
     ;"battle-field of that war. We have come to dedicate a portion of that field, ", 10, \
@@ -422,7 +465,6 @@ save_file:
     ;"that this nation, under God, shall have a new birth of freedom -- and that ", 10, \
     ;"government of the people, by the people, for the people, shall not perish from ", 10, \
     ;"the earth.", 10, 0
-
 
   filename: db "SMOLED.TXT", 0 ; times 13 db 0	; 8.3
 
