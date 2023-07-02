@@ -20,8 +20,7 @@
 ;  leaves screen in a weird state (bold)
 ;  handle insert newline
 ;  handle delete newline
-;  handle delete KEY
-;  after backspace, redrawing the line leaves extra text at the end of the line
+;  handle delete KEY (vs ctrl+d)
 ;  status line
 ;  only insert
 
@@ -171,7 +170,6 @@ notb:
   ; fall through
 
 notf:
-  ; TODO: process backspace (ctrl-h) delete (chr 127?), newline (ctrl-m)
   cmp al, 8  ; backspace
   jne noth
   ; if x!=0 or y!=0, do backspace
@@ -189,7 +187,7 @@ notf:
 
 noth:
   ;cmp al, 127 ; delete : UGH THIS IS NOT DELETE
-  cmp al, 4 ; ctrl-d
+  cmp al, 4 ; ctrl+d
   jne notdel
   ; if x < 80, do delete
   cmp byte [x], 79
@@ -211,7 +209,8 @@ notdel:
 
   mov byte [dirty], 1
 
-  ; insert the char at al at the current offset, and redraw the line from this x location to the EOL.
+  ; insert the char at al at the current offset
+  ; TODO:, and redraw the line from this x location to the EOL.
   call insert_char
 
   ; write the character
@@ -337,7 +336,7 @@ draw_all:
   mov al, [si]  ; get next character
   inc si
   cmp al, 0 ; eof
-  je .done
+  je .done  ; TODO: clear from eof to EOL, like .newline.
   cmp al, 10 ; newline
   je .newline
 
@@ -359,8 +358,24 @@ draw_all:
   jmp .loop
 
 .newline:
-  ; TODO: erase to end of row
+  ; erase to end of row
+  cmp dl, 80
+  je .resetcol
+  ; put space at current location
+  mov al, ' '
+  mov ah, 2
+  ; dh, dl already set
+  int 0x10
 
+  ; put char
+  mov bx, 7 ; gray
+  mov cx, 1
+  mov ah, 9
+  int 0x10
+  inc dl
+  jmp .newline
+
+.resetcol:
   ; set cursor to start of next row
   mov dl, 0
   inc dh
@@ -373,21 +388,20 @@ draw_all:
 ; move everything down one byte so we can insert a character at the current location
 insert_char:
   call get_text_end
-  ; di has end of text
+  ; di points at the zero at the end of text
 
 .loop:
-  cmp di, [offset]
-  je .done
-  mov cl, [di]
-  mov [di+1], cl
+  mov cl, [di-1]
+  mov [di], cl
   dec di
-  jmp .loop
+  cmp di, [offset]
+  jne .loop
 
-.done:
   ret
 
 
 ; calculate the end of text, returned in di
+; TODO: cache this and only change it when a character is inserted or deleted
 get_text_end:
   mov di, text
 .loop:
@@ -448,6 +462,7 @@ save_file:
 
   ; 24 lines x 80 rows, kind of draconian
   ; text: times 1920 db 0
+  ;text: db  "abc", 10, 0
   text: db  "Four score and seven years ago our fathers brought forth on this continent.", 10, "a new nation, conceived in Liberty, and dedicated to the proposition that ", 10, "all men are created equal.", 10,  0
   buffer: times 1000 db 0
     ;"Now we are engaged in a great civil war, testing whether that nation, or any ", 10, \
