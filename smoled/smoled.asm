@@ -14,15 +14,13 @@
 
 
 ; Issues/TODO:
-;  newlines (char 10) is insufficient on dos. it only linefeeds. needs CR (char 13)
-;    proposal: in memory it's always 10, but when saving it's 1310
-;  no load
-;  leaves screen in a weird state (bold)
-;  handle insert newline
-;  handle delete newline
+;  load file
+;  insert newline
+;  delete/replace CRLF (only deletes the CR, not the LF, shrug. mostly works)
+;  when going down and the cursor is past end of line, weird things happen
+;  overwrite mode
 ;  handle delete KEY (vs ctrl+d)
 ;  status line
-;  only insert
 
 org 0x0100
 
@@ -42,23 +40,22 @@ org 0x0100
   ; clear screen
   mov al, 0
   mov ah, 6 ; 0x06 is scroll; al=0 = clear screen
-  mov bh, 0x0f  ; attribute f=bright white, for the TITLE
+  mov bh, 0x07  ; attribute 7=regular white
   xor cx, cx  ; cl,ch=window upper left corner
   mov dh, 24 ; dl,dh=window lower right corner
   mov dl, 79
   int 0x10
 
-  ; set cursor to bottom of screen
-  mov ah, 2
-  xor bx, bx
-  mov dl, 37
+  ; output the title
+  mov al, 0
+  mov bh, 0
+  mov bl, 15   ; attribute: bright white
+  mov cx, 7    ; length
+  mov dl, 37   ; dl, dh are column, riw
   mov dh, 24
+  mov bp, TITLE
+  mov ah, 0x13
   int 0x10
-
-  ; output the $-terminated string
-  mov ah, 9
-  mov dx, TITLE
-  int 0x21
 
   ; box cursor
   mov ch, 0
@@ -66,7 +63,7 @@ org 0x0100
   mov ah, 1
   int 0x10
 
-  ; calculate offset into text; sets cl to THE character
+  ; calculate cursor location in text; sets cl to THE character
   call xy_to_offset
 
   ; move to status line
@@ -192,14 +189,14 @@ noth:
   ; if x < 80, do delete
   cmp byte [x], 79
   je notdel
-  inc word [offset]
+  inc word [cursorloc]
   call backspace
   call draw_all
   jmp updatecursor
 
 
 notdel:
-  ; TODO: process newline (ctrl-m)
+  ; TODO: process enter (ctrl-m)
 
   ; detect if printable: if ascii 32 to 126
   cmp al, 32
@@ -209,12 +206,12 @@ notdel:
 
   mov byte [dirty], 1
 
-  ; insert the char at al at the current offset
+  ; insert the char at al at the current cursorloc
   ; TODO:, and redraw the line from this x location to the EOL.
   call insert_char
 
   ; write the character
-  mov di, [offset]
+  mov di, [cursorloc]
   mov [di], al
 
   ; NOTE: this is slow on hardware, but fast on Win10
@@ -281,9 +278,9 @@ goodcursor4:
   jmp waiting
 
 
-; move from offset to end of text back one
+; move from cursorloc to end of text back one
 backspace:
-  mov di, [offset]
+  mov di, [cursorloc]
 .loop:
   mov cl, [di]
   mov [di-1], cl
@@ -304,19 +301,23 @@ xy_to_offset:
   jne .nothere
 
   ; found it!
-  mov [offset], si
+  mov [cursorloc], si
   ret
 
 .nothere:
   cmp cl, 0
   je .done  ; should be error, shrug.
 
-	cmp cl, 10 ; newline
+	cmp cl, 13 ; CR
   je .newline
   inc dl ; next column
 
+  cmp dl, 80 ; got to last column without a newline, reset 
+  je .newline
+
   jmp .next
 .newline:
+  inc si  ; skip LF
 	mov dl, 0 ; clear column
 	inc dh    ; next line
 .next:
@@ -336,8 +337,8 @@ draw_all:
   mov al, [si]  ; get next character
   inc si
   cmp al, 0 ; eof
-  je .done  ; TODO: clear from eof to EOL, like .newline.
-  cmp al, 10 ; newline
+  je .done
+  cmp al, 13 ; CR
   je .newline
 
   ; put al at current location
@@ -354,7 +355,8 @@ draw_all:
 
   ; go to next column in this row
   inc dl
-
+  cmp dl, 80
+  je .resetcol
   jmp .loop
 
 .newline:
@@ -372,16 +374,27 @@ draw_all:
   mov cx, 1
   mov ah, 9
   int 0x10
-  inc dl
+  inc dl  ; next column
   jmp .newline
 
 .resetcol:
+  inc si  ; skip LF
   ; set cursor to start of next row
   mov dl, 0
   inc dh
   jmp .loop
 
 .done:
+  ; clear the next line (in case the # of lines is smaller)
+  mov al, 0
+  mov bh, 0
+  mov bl, 7
+  mov cx, 80
+  mov dl, 0
+  mov bp, blankline
+  mov ah, 0x13
+  int 0x10
+
   ret
 
 
@@ -394,7 +407,7 @@ insert_char:
   mov cl, [di-1]
   mov [di], cl
   dec di
-  cmp di, [offset]
+  cmp di, [cursorloc]
   jne .loop
 
   ret
@@ -443,7 +456,7 @@ save_file:
 
 ; DATA HERE:
 ; segment .data - not needed since this is built as a com file
-  TITLE: db "Smoled$", 0
+  TITLE: db "Smoled", 0
 
   ; physical cursor location on screen
   x: db 0  ; 0-79
@@ -453,7 +466,7 @@ save_file:
   ; top: db 0 this will be for scrolling, not v1
 
   ; absolute location of cursor in text
-  offset: dw 0
+  cursorloc: dw 0
 
   ; last key hit
   lastkey: db 0
@@ -462,24 +475,23 @@ save_file:
 
   ; 24 lines x 80 rows, kind of draconian
   ; text: times 1920 db 0
-  ;text: db  "abc", 10, 0
-  text: db  "Four score and seven years ago our fathers brought forth on this continent.", 10, "a new nation, conceived in Liberty, and dedicated to the proposition that ", 10, "all men are created equal.", 10,  0
+  text: db  "Four score and seven years ago our fathers brought forth on this continent.", 13, 10, "a new nation, conceived in Liberty,", 13, 10, "and dedicated to the proposition that", 13, 10, "all men are created equal.", 13, 10, 0
   buffer: times 1000 db 0
-    ;"Now we are engaged in a great civil war, testing whether that nation, or any ", 10, \
-    ;"nation so conceived and so dedicated, can long endure. We are met on a great ", 10, \
-    ;"battle-field of that war. We have come to dedicate a portion of that field, ", 10, \
-    ;"as a final resting place for those who here gave their lives that that nation ", 10, \
-    ;"might live. It is altogether fitting and proper that we should do this.", 10, 10, \
-    ;"But, in a larger sense, we can not dedicate -- we can not consecrate -- we ", 10, \
-    ;"can not hallow -- this ground. The brave men, living and dead, who struggled ", 10, \
-    ;"here, have consecrated it, far above our poor power to add or detract. ", 10, \
-    ;"... It is rather for us to be here dedicated to the great task ", 10, \
-    ;"remaining before us -- that from these honored dead we take increased ", 10, \
-    ;"devotion to that cause for which they gave the last full measure of devotion ", 10, \
-    ;"-- that we here highly resolve that these dead shall not have died in vain -- ", 10, \
-    ;"that this nation, under God, shall have a new birth of freedom -- and that ", 10, \
-    ;"government of the people, by the people, for the people, shall not perish from ", 10, \
-    ;"the earth.", 10, 0
+    ;"Now we are engaged in a great civil war, testing whether that nation, or any ", 13, \
+    ;"nation so conceived and so dedicated, can long endure. We are met on a great ", 13, \
+    ;"battle-field of that war. We have come to dedicate a portion of that field, ", 13, \
+    ;"as a final resting place for those who here gave their lives that that nation ", 13, \
+    ;"might live. It is altogether fitting and proper that we should do this.", 13, 13, \
+    ;"But, in a larger sense, we can not dedicate -- we can not consecrate -- we ", 13, \
+    ;"can not hallow -- this ground. The brave men, living and dead, who struggled ", 13, \
+    ;"here, have consecrated it, far above our poor power to add or detract. ", 13, \
+    ;"... It is rather for us to be here dedicated to the great task ", 13, \
+    ;"remaining before us -- that from these honored dead we take increased ", 13, \
+    ;"devotion to that cause for which they gave the last full measure of devotion ", 13, \
+    ;"-- that we here highly resolve that these dead shall not have died in vain -- ", 13, \
+    ;"that this nation, under God, shall have a new birth of freedom -- and that ", 13, \
+    ;"government of the people, by the people, for the people, shall not perish from ", 13, \
+    ;"the earth.", 13, 0
 
   filename: db "SMOLED.TXT", 0 ; times 13 db 0	; 8.3
-
+  blankline: times 80 db ' '
