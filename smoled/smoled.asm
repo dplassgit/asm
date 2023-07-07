@@ -15,7 +15,6 @@
 
 ; Issues/TODO:
 ;  load file
-;  insert newline
 ;  delete/replace CRLF (only deletes the CR, not the LF, shrug. mostly works)
 ;  when going down and the cursor is past end of line, weird things happen
 ;  overwrite mode
@@ -194,10 +193,31 @@ noth:
   call draw_all
   jmp updatecursor
 
-
 notdel:
-  ; TODO: process enter (ctrl-m)
+  ; process enter (ctrl-m)
+  cmp al, 13 ;  ctrl+m / enter
+  jne notenter
 
+  mov byte [dirty], 1
+
+  ; insert 13, 10
+  call insert_char
+  mov di, [cursorloc]
+  mov byte [di], 13
+
+  call insert_char
+  inc word [cursorloc]
+  mov di, [cursorloc]
+  mov byte [di], 10
+
+  call draw_all
+
+  ; go to next cursor location (?)
+  inc byte [y]
+  mov byte [x], 0
+  jmp updatecursor
+
+notenter:
   ; detect if printable: if ascii 32 to 126
   cmp al, 32
   jl notprintable
