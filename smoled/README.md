@@ -12,9 +12,9 @@ or
 
 ## Usage
 
-Run somled.com
+Run `somled.com`
 
-Cursor keys are:
+Cursor keys:
 
 ```
 Up: ctrl+p
@@ -24,7 +24,8 @@ Right: ctrl+f
 Start of line: ctrl+a
 End of line: ctrl+e
 Quit: ctrl+q (twice, if dirty)
-Save: ctrl+s
+Save: ctrl+s (always saves to SMOLED.TXT for now)
+Delete: ctrl+d (not "Del" key)
 ```
 
 
