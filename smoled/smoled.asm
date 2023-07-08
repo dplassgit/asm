@@ -15,10 +15,12 @@
 
 ; Issues/TODO:
 ;  load file
+;  save to correct filename
 ;  delete/replace CRLF (only deletes the CR, not the LF, shrug. mostly works)
-;  when going down and the cursor is past end of line, weird things happen
-;  overwrite mode
 ;  handle delete KEY (vs ctrl+d)
+;  overwrite mode; insert = BIOS code 0x52
+;  when going down and the cursor is past end of line, weird things happen
+;  cursor keys BIOS code up 0x48 down 0x50 left 0x4b right 0x4d home 0x47 end 0x4f
 ;  status line
 
 org 0x0100
@@ -32,9 +34,6 @@ org 0x0100
 ;
 
 ; load file into memory (up to 2k - screen only)
-
-; draw status line (filename, dirty, mode)
-
 
   ; clear screen
   mov al, 0
@@ -182,7 +181,7 @@ notf:
 
 
 noth:
-  ;cmp al, 127 ; delete : UGH THIS IS NOT DELETE
+  ; delete = BIOS code 0x53
   cmp al, 4 ; ctrl+d
   jne notdel
   ; if x < 80, do delete
@@ -493,6 +492,9 @@ save_file:
 
   dirty: db 0
 
+  filename: db "SMOLED.TXT", 0 ; times 13 db 0	; 8.3
+  blankline: times 80 db ' '
+
   ; 24 lines x 80 rows, kind of draconian
   ; text: times 1920 db 0
   text: db  "Four score and seven years ago our fathers brought forth on this continent.", 13, 10, "a new nation, conceived in Liberty,", 13, 10, "and dedicated to the proposition that", 13, 10, "all men are created equal.", 13, 10, 0
@@ -512,6 +514,3 @@ save_file:
     ;"that this nation, under God, shall have a new birth of freedom -- and that ", 13, \
     ;"government of the people, by the people, for the people, shall not perish from ", 13, \
     ;"the earth.", 13, 0
-
-  filename: db "SMOLED.TXT", 0 ; times 13 db 0	; 8.3
-  blankline: times 80 db ' '
