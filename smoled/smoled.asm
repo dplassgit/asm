@@ -3,16 +3,6 @@
 ; tinyasm -f bin smoled.asm -o smoled.com
 
 
-; Design thoughts:
-
-; Need to update the screen after every character.
-; So, draw all characters from the current character to newline (or EOF) mapping starting at current physical column & row.
-
-; If inserting a newline, need to
-; 1 Clear rest of the current physical line
-; 2 Redraw all lines from next line to end of page
-
-
 ; Issues/TODO:
 ;  load file
 ;  save to correct filename
@@ -25,6 +15,7 @@
 
 org 0x0100
 
+section .text
 
 ; get filename from 2nd arg https://en.wikipedia.org/wiki/Program_Segment_Prefix
 ;  xor   bx,bx
@@ -33,19 +24,18 @@ org 0x0100
 ;  je   exit      ; not allowed to have a zero-length
 ;
 
-; load file into memory (up to 2k - screen only)
+  ; TODO: load file into memory (up to 2k)
 
   ; clear screen
   mov al, 0
   mov ah, 6 ; 0x06 is scroll; al=0 = clear screen
-  mov bh, 0x07  ; attribute 7=regular white
+  mov bh, 7  ; attribute 7=regular white
   xor cx, cx  ; cl,ch=window upper left corner
   mov dh, 24 ; dl,dh=window lower right corner
   mov dl, 79
   int 0x10
 
   ; output the title
-  mov al, 0
   mov bh, 0
   mov bl, 15   ; attribute: bright white
   mov cx, 7    ; length
@@ -126,7 +116,6 @@ really_quit:
   int 0x10
 
   int 0x20   ; back to o/s
-  ret
 
 notq:
   cmp al, 1  ; ctrl+a
@@ -177,26 +166,28 @@ notf:
   call backspace
   call draw_all
   dec byte [x]
+  ; not falling through because the two calls munge things.
   jmp updatecursor
 
 
 noth:
-  ; delete = BIOS code 0x53
   cmp al, 4 ; ctrl+d
   jne notdel
+  ; process ctrl+d (NOT DELETE)
   ; if x < 80, do delete
   cmp byte [x], 79
   je notdel
   inc word [cursorloc]
   call backspace
   call draw_all
+  ; not falling through because the two calls munge things.
   jmp updatecursor
 
 notdel:
-  ; process enter (ctrl-m)
   cmp al, 13 ;  ctrl+m / enter
   jne notenter
 
+  ; process enter (ctrl-m)
   mov byte [dirty], 1
 
   ; insert 13, 10
@@ -211,7 +202,7 @@ notdel:
 
   call draw_all
 
-  ; go to next cursor location (?)
+  ; go to next cursor location
   inc byte [y]
   mov byte [x], 0
   jmp updatecursor
@@ -226,14 +217,14 @@ notenter:
   mov byte [dirty], 1
 
   ; insert the char at al at the current cursorloc
-  ; TODO:, and redraw the line from this x location to the EOL.
+  ; TODO: and redraw the line from this x location to the EOL.
   call insert_char
 
   ; write the character
   mov di, [cursorloc]
   mov [di], al
 
-  ; NOTE: this is slow on hardware, but fast on Win10
+  ; NOTE: this is slow on hardware, but fast on DOSBox
   call draw_all
 
   ; go to next cursor location
@@ -275,6 +266,7 @@ goodcursor3:
 goodcursor4:
   xor bx, bx
   mov ah, 2
+  ; dl, dh already set
   int 0x10   ; update the cursor location on the screen
 
   call xy_to_offset
@@ -287,8 +279,7 @@ goodcursor4:
   int 0x10
 
   ; set character
-  mov bh, 0
-  mov bl, 4  ; bright red
+  mov bl, 4  ; bright red (bh=0)
   mov al, cl   ; character to print
   mov cx, 1
   mov ah, 9
@@ -308,6 +299,7 @@ backspace:
   jne .loop
   ret
 
+; Sets cursorloc and cl to the value at cursorloc
 xy_to_offset:
   xor dx, dx  ; dl=x, dh=y
   mov si, text
@@ -422,6 +414,7 @@ insert_char:
   call get_text_end
   ; di points at the zero at the end of text
 
+; surely this can be done with a loop, and don't call me Shirley
 .loop:
   mov cl, [di-1]
   mov [di], cl
@@ -470,11 +463,9 @@ save_file:
 
 .error:
   int 0x20   ; back to o/s
-  ret
 
 
-; DATA HERE:
-; segment .data - not needed since this is built as a com file
+segment .data
   TITLE: db "Smoled", 0
 
   ; physical cursor location on screen
@@ -484,13 +475,13 @@ save_file:
   ; what line of the file is the top line shown?
   ; top: db 0 this will be for scrolling, not v1
 
-  ; absolute location of cursor in text
-  cursorloc: dw 0
+  dirty: db 0
 
   ; last key hit
   lastkey: db 0
 
-  dirty: db 0
+  ; absolute location of cursor in text
+  cursorloc: dw 0
 
   filename: db "SMOLED.TXT", 0 ; times 13 db 0	; 8.3
   blankline: times 80 db ' '
