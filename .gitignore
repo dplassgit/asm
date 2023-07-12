@@ -6,3 +6,4 @@ bazel-testlogs/
 *.com
 *.lst
 SMOLED.TXT
+*.swp

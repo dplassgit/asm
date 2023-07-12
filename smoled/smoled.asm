@@ -91,21 +91,31 @@ waiting:
   int 0x21
   push ax  ; save it
 
-  cmp al, 19 ; ctrl+s / save
-  jne nots
-  call save_file
-  mov byte [dirty], 0
+  cmp al, 26
+  jle ctrl_something
+  jmp printable
+
+ctrl_something:
+  ; get key and double it (words), for the lookup
+  mov bl, al
+  shl bx, 1
+  call handlers[bx]
   jmp updatecursor
 
-nots:
-  cmp al, 17 ; ctrl+q / quit
-  jne notq
+ctrl_s:
+  call save_file
+  mov byte [dirty], 0
+ctrl_nop:
+  ret
+
+ctrl_q:
   ; if clean, just quit
   cmp byte [dirty], 0
   je really_quit
   ; dirty, but if we hit ctrl-q 2x in a row, still end
   cmp al, [lastkey]
-  jne notq
+  je really_quit
+  ret
 
   ; fall through:
 really_quit:
@@ -117,79 +127,56 @@ really_quit:
 
   int 0x20   ; back to o/s
 
-notq:
-  cmp al, 1  ; ctrl+a
-  jne nota
+ctrl_a:
   mov byte [x], 0  ; beginning of line
-  ; fall through
+  ret
 
-nota:
-  cmp al, 5  ; ctrl+e
-  jne note
+ctrl_e:
   mov byte [x], 79 ; end of line
-  ; fall through
+  ret
 
-note:
-  cmp al, 14  ; ctrl-n / next line
-  jne notn
-  inc byte [y]
-  ; fall through
+ctrl_n:
+  inc byte [y]  ; next line
+  ret
 
-notn:
-  cmp al, 16  ; ctrl-p / prev line
-  jne notp
-  dec byte [y]
-  ; fall through
+ctrl_p:
+  dec byte [y]  ; prev line
+  ret
 
-notp:
-  cmp al, 2  ; ctrl-b / back one char
-  jne notb
-  dec byte [x]
-  ; fall through
+ctrl_b:
+  dec byte [x]  ; prev char
+  ret
 
-notb:
-  cmp al, 6  ; ctrl-f / forward one char
-  jne notf
-  inc byte [x]
-  ; fall through
+ctrl_f:
+  inc byte [x]  ; next char
+  ret
 
-notf:
-  cmp al, 8  ; backspace
-  jne noth
+ctrl_h:
   ; if x!=0 or y!=0, do backspace
   cmp byte [x], 0
   jne .dobackspace
   cmp byte [y], 0
-  je noth
+  jne .dobackspace
+  ret
+
   ; not at beginning. shuffle everything down
 .dobackspace:
   call backspace
   call draw_all
   dec byte [x]
-  ; not falling through because the two calls munge things.
-  jmp updatecursor
+  ret
 
-
-noth:
-  cmp al, 4 ; ctrl+d
-  jne notdel
-  ; process ctrl+d (NOT DELETE)
+ctrl_d:
   ; if x < 80, do delete
   cmp byte [x], 79
-  je notdel
+  je .done
   inc word [cursorloc]
   call backspace
   call draw_all
-  ; not falling through because the two calls munge things.
-  jmp updatecursor
+.done:
+  ret
 
-notdel:
-  cmp al, 13 ;  ctrl+m / enter
-  jne notenter
-
-  ; process enter (ctrl-m)
-  mov byte [dirty], 1
-
+ctrl_m:
   ; insert 13, 10
   call insert_char
   mov di, [cursorloc]
@@ -205,16 +192,14 @@ notdel:
   ; go to next cursor location
   inc byte [y]
   mov byte [x], 0
-  jmp updatecursor
+  ret
 
-notenter:
+printable:
   ; detect if printable: if ascii 32 to 126
   cmp al, 32
   jl notprintable
   cmp al, 127
   jge notprintable
-
-  mov byte [dirty], 1
 
   ; insert the char at al at the current cursorloc
   ; TODO: and redraw the line from this x location to the EOL.
@@ -290,6 +275,7 @@ goodcursor4:
 
 ; move from cursorloc to end of text back one
 backspace:
+  mov byte [dirty], 1
   mov di, [cursorloc]
 .loop:
   mov cl, [di]
@@ -411,6 +397,7 @@ draw_all:
 
 ; move everything down one byte so we can insert a character at the current location
 insert_char:
+  mov byte [dirty], 1
   call get_text_end
   ; di points at the zero at the end of text
 
@@ -468,6 +455,8 @@ save_file:
 segment .data
   TITLE: db "Smoled", 0
 
+  handlers: dw ctrl_nop, ctrl_a, ctrl_b, ctrl_nop, ctrl_d, ctrl_e, ctrl_f, ctrl_nop, ctrl_h, ctrl_nop, ctrl_nop, ctrl_nop, ctrl_nop, ctrl_m, ctrl_n, ctrl_nop, ctrl_p, ctrl_q, ctrl_nop, ctrl_s, ctrl_nop, ctrl_nop, ctrl_nop, ctrl_nop, ctrl_nop, ctrl_nop, ctrl_nop, ctrl_nop
+
   ; physical cursor location on screen
   x: db 0  ; 0-79
   y: db 0  ; 0-22
@@ -486,9 +475,13 @@ segment .data
   filename: db "SMOLED.TXT", 0 ; times 13 db 0	; 8.3
   blankline: times 80 db ' '
 
+
   ; 24 lines x 80 rows, kind of draconian
   ; text: times 1920 db 0
-  text: db  "Four score and seven years ago our fathers brought forth on this continent.", 13, 10, "a new nation, conceived in Liberty,", 13, 10, "and dedicated to the proposition that", 13, 10, "all men are created equal.", 13, 10, 0
+  text: db "Four score and seven years ago our fathers brought forth on this continent.", 13, 10
+  text2: db "a new nation, conceived in Liberty,", 13, 10
+  text3: db "and dedicated to the proposition that", 13, 10
+  text4: db "all men are created equal.", 13, 10, 0
   buffer: times 1000 db 0
     ;"Now we are engaged in a great civil war, testing whether that nation, or any ", 13, \
     ;"nation so conceived and so dedicated, can long endure. We are met on a great ", 13, \
