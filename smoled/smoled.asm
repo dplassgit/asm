@@ -4,23 +4,17 @@
 
 
 ; Issues/TODO:
-;  save to previously entered filename
+;  overwrites status line if file has > 23 lines
 ;  when going down and the cursor is past end of line, weird things happen
 ;  BUG: no newline -> NO TEXT
 ;  delete/replace CRLF (only deletes the CR, not the LF, shrug. mostly works)
+;  status line
 ;  cursor keys BIOS code up 0x48 down 0x50 left 0x4b right 0x4d home 0x47 end 0x4f delete ???
 ;  overwrite mode; insert = BIOS code 0x52
-;  status line
 
 org 0x0100
 
 section .text
-
-  ; Set box cursor
-  mov ch, 0
-  mov cl, 7
-  mov ah, 1
-  int 0x10
 
   ; Clear screen
   mov al, 0
@@ -71,7 +65,7 @@ waiting:
 
   cmp al, 26
   jle ctrl_something
-  jmp printable
+  jmp maybeprintable
 
 ctrl_something:
   ; get key and double it (words), for the lookup
@@ -93,7 +87,6 @@ ctrl_d:
   je .done
   inc word [cursorloc]
   call backspace
-  call draw_all
 .done:
   ret
 ctrl_e:
@@ -112,12 +105,7 @@ ctrl_h:
   ; not at beginning. shuffle everything down
 .dobackspace:
   call backspace
-  call draw_all
   dec byte [x]
-  ret
-ctrl_l:
-  call load_file
-  call draw_all
   ret
 ctrl_m:
   ; insert 13, 10
@@ -147,24 +135,16 @@ ctrl_q:
   je .really_quit
   ret
 .really_quit:
-  mov ch, 6
-  mov cl, 7
-  mov ah, 1
-  int 0x10  ; restore cursor
   int 0x20  ; back to o/s
-ctrl_s:
-  call save_file
-  mov byte [dirty], 0
-  ret
 
-printable:
+maybeprintable:
   ; detect if printable: if ascii 32 to 126
   cmp al, 32
   jl notprintable
   cmp al, 127
   jge notprintable
 
-  ; insert a char 
+  ; move characters down
   call insert_char
 
   ; store the character in al at the current cursorloc
@@ -172,7 +152,7 @@ printable:
   mov [di], al
 
   ; NOTE: this is slow on hardware, but fast on DOSBox
-  ; Instead, redraw the line from this x location to the EOL.
+  ; TODO: Instead, redraw the line from this x location to the EOL.
   call draw_all
 
   ; go to next cursor location
@@ -187,29 +167,29 @@ updatecursor:
   mov dl, [x] ; column
   cmp dl, 80
   jl .goodcursor1
+  ; past end of row, go to next row
   mov byte [x], 0
   inc byte [y]
-  jmp updatecursor
 
 .goodcursor1:
   cmp dl, 0xff
   jne .goodcursor2
+  ; column -1 - go back one row
   mov byte [x], 79
   dec byte [y]
-  jmp updatecursor
 
 .goodcursor2:
   mov dh, [y] ; row
   cmp dh, 0xff
   jne .goodcursor3
+  ; row -1, go to row 0
   mov byte [y], 0
-  jmp updatecursor
 
 .goodcursor3:
   cmp dh, 23
   jle .goodcursor4
+  ; > row 24, go to row 23.
   mov byte [y], 23
-  jmp updatecursor
 
 .goodcursor4:
   xor bx, bx
@@ -242,8 +222,10 @@ backspace:
   mov cl, [di]
   mov [di-1], cl
   inc di
+  ; surely this can be done with a loop, and don't call me Shirley
   cmp cl, 0
   jne .loop
+  call draw_all
   ret
 
 ; Sets cursorloc and cl to the value at cursorloc
@@ -442,6 +424,9 @@ load_file:
   mov ah, 0x3e
   int 0x21
   jc .load_error
+
+  mov byte [dirty], 0
+  call draw_all
   ret
 
 .load_error:
@@ -453,8 +438,11 @@ load_file:
 
 
 save_file:
-  call get_filename
+  cmp byte filename[1], 0 ; is size already set?
+  jne .overwrite
+  call get_filename ; no, get filename
 
+.overwrite
   xor cx, cx   ; 0=write normal file
   mov dx, filenamedata
   mov ah, 0x3c
@@ -476,6 +464,7 @@ save_file:
   mov ah, 0x3e
   int 0x21
   jc .error
+  mov byte [dirty], 0
   ret
 
 .error:
@@ -490,7 +479,7 @@ save_file:
 segment .data
   TITLE: db "Smoled", 0
 
-  handlers: dw ctrl_nop, ctrl_a, ctrl_b, ctrl_nop, ctrl_d, ctrl_e, ctrl_f, ctrl_nop, ctrl_h, ctrl_nop, ctrl_nop, ctrl_nop, ctrl_l, ctrl_m, ctrl_n, ctrl_nop, ctrl_p, ctrl_q, ctrl_nop, ctrl_s, ctrl_nop, ctrl_nop, ctrl_nop, ctrl_nop, ctrl_nop, ctrl_nop, ctrl_nop
+  handlers: dw ctrl_nop, ctrl_a, ctrl_b, ctrl_nop, ctrl_d, ctrl_e, ctrl_f, ctrl_nop, ctrl_h, ctrl_nop, ctrl_nop, ctrl_nop, load_file, ctrl_m, ctrl_n, ctrl_nop, ctrl_p, ctrl_q, ctrl_nop, save_file, ctrl_nop, ctrl_nop, ctrl_nop, ctrl_nop, ctrl_nop, ctrl_nop, ctrl_nop
 
   ; physical cursor location on screen
   x: db 0  ; 0-79
@@ -512,8 +501,8 @@ segment .data
 
   blankline: times 80 db ' '
 
-  load_error_msg: db "load error $"
-  save_error_msg: db "save error $"
+  load_error_msg: db "Load error $"
+  save_error_msg: db "Save error $"
 
 segment .bss
   ; Note, it doesn't even really need to be 1920 since we don't have any data past it,
