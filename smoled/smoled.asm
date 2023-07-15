@@ -1,79 +1,57 @@
 ; to build:
 ; nasm -fbin smoled.asm -o smoled.com
-; tinyasm -f bin smoled.asm -o smoled.com
+; tinyasm -f bin smoled.asm -o smoled.com <<< doesn't work anymore.
 
 
 ; Issues/TODO:
-;  load file
-;  save to correct filename
-;  delete/replace CRLF (only deletes the CR, not the LF, shrug. mostly works)
-;  handle delete KEY (vs ctrl+d)
-;  overwrite mode; insert = BIOS code 0x52
+;  save to previously entered filename
 ;  when going down and the cursor is past end of line, weird things happen
-;  cursor keys BIOS code up 0x48 down 0x50 left 0x4b right 0x4d home 0x47 end 0x4f
+;  BUG: no newline -> NO TEXT
+;  delete/replace CRLF (only deletes the CR, not the LF, shrug. mostly works)
+;  cursor keys BIOS code up 0x48 down 0x50 left 0x4b right 0x4d home 0x47 end 0x4f delete ???
+;  overwrite mode; insert = BIOS code 0x52
 ;  status line
 
 org 0x0100
 
 section .text
 
-; get filename from 2nd arg https://en.wikipedia.org/wiki/Program_Segment_Prefix
-;  xor   bx,bx
-;  mov   bl,[0x80]
-;  cmp   bl,0x00
-;  je   exit      ; not allowed to have a zero-length
-;
-
-  ; TODO: load file into memory (up to 2k)
-
-  ; clear screen
-  mov al, 0
-  mov ah, 6 ; 0x06 is scroll; al=0 = clear screen
-  mov bh, 7  ; attribute 7=regular white
-  xor cx, cx  ; cl,ch=window upper left corner
-  mov dh, 24 ; dl,dh=window lower right corner
-  mov dl, 79
-  int 0x10
-
-  ; output the title
-  mov bh, 0
-  mov bl, 15   ; attribute: bright white
-  mov cx, 7    ; length
-  mov dl, 37   ; dl, dh are column, riw
-  mov dh, 24
-  mov bp, TITLE
-  mov ah, 0x13
-  int 0x10
-
-  ; box cursor
+  ; Set box cursor
   mov ch, 0
   mov cl, 7
   mov ah, 1
   int 0x10
 
-  ; calculate cursor location in text; sets cl to THE character
-  call xy_to_offset
-
-  ; move to status line
-  mov ah, 2
-  xor bx, bx
-  mov dl, 0 ; bottom left
-  mov dh, 24
+  ; Clear screen
+  mov al, 0
+  mov ah, 6   ; 0x06 is scroll; al=0 = clear screen
+  mov bh, 7   ; attribute 7=regular white
+  xor cx, cx  ; cl,ch=window upper left corner
+  mov dh, 24  ; dl,dh=window lower right corner
+  mov dl, 79
   int 0x10
 
-  ; set character
+  ; write the title
   mov bh, 0
-  mov bl, 4  ; bright red
-  mov al, cl   ; character to print
-  mov cx, 1
-  mov ah, 9
-  int 0x10  ; write char and attribute
+  mov bl, 15   ; attribute: bright white
+  mov cx, 7    ; length
+  mov dl, 37   ; dl, dh are column, row
+  mov dh, 24
+  mov bp, TITLE
+  mov ah, 0x13
+  int 0x10
 
-  ; draw the whole text.
-  call draw_all
+  ; Set initial cursor location to start of text
+  mov di, text
+  mov [cursorloc], di
+
+  call clear_text
+  ; insert CRLF because reasons
+  mov byte [text], 13
+  mov byte [text+1], 10
 
   xor ax, ax
-  push ax  ; preset the lastkey
+  push ax  ; preset the lastkey to zero
 
 waiting:
   ; update the cursor location on the screen
@@ -88,7 +66,7 @@ waiting:
 
   ; get char into al
   mov ah, 7
-  int 0x21
+  int 0x21  ; wait for a key
   push ax  ; save it
 
   cmp al, 26
@@ -102,70 +80,13 @@ ctrl_something:
   call handlers[bx]
   jmp updatecursor
 
-ctrl_s:
-  call save_file
-  mov byte [dirty], 0
-ctrl_nop:
-  ret
-
-ctrl_q:
-  ; if clean, just quit
-  cmp byte [dirty], 0
-  je really_quit
-  ; dirty, but if we hit ctrl-q 2x in a row, still end
-  cmp al, [lastkey]
-  je really_quit
-  ret
-
-  ; fall through:
-really_quit:
-  ; restore cursor
-  mov ch, 6
-  mov cl, 7
-  mov ah, 1
-  int 0x10
-
-  int 0x20   ; back to o/s
-
 ctrl_a:
   mov byte [x], 0  ; beginning of line
+ctrl_nop:
   ret
-
-ctrl_e:
-  mov byte [x], 79 ; end of line
-  ret
-
-ctrl_n:
-  inc byte [y]  ; next line
-  ret
-
-ctrl_p:
-  dec byte [y]  ; prev line
-  ret
-
 ctrl_b:
-  dec byte [x]  ; prev char
+  dec byte [x]  ; back/prev char
   ret
-
-ctrl_f:
-  inc byte [x]  ; next char
-  ret
-
-ctrl_h:
-  ; if x!=0 or y!=0, do backspace
-  cmp byte [x], 0
-  jne .dobackspace
-  cmp byte [y], 0
-  jne .dobackspace
-  ret
-
-  ; not at beginning. shuffle everything down
-.dobackspace:
-  call backspace
-  call draw_all
-  dec byte [x]
-  ret
-
 ctrl_d:
   ; if x < 80, do delete
   cmp byte [x], 79
@@ -175,23 +96,65 @@ ctrl_d:
   call draw_all
 .done:
   ret
-
+ctrl_e:
+  mov byte [x], 79 ; end of physical line
+  ret
+ctrl_f:
+  inc byte [x]  ; forward/next char
+  ret
+ctrl_h:
+  ; if x!=0 or y!=0, do backspace
+  cmp byte [x], 0
+  jne .dobackspace
+  cmp byte [y], 0
+  jne .dobackspace
+  ret
+  ; not at beginning. shuffle everything down
+.dobackspace:
+  call backspace
+  call draw_all
+  dec byte [x]
+  ret
+ctrl_l:
+  call load_file
+  call draw_all
+  ret
 ctrl_m:
   ; insert 13, 10
   call insert_char
   mov di, [cursorloc]
   mov byte [di], 13
-
   call insert_char
   inc word [cursorloc]
   mov di, [cursorloc]
   mov byte [di], 10
-
   call draw_all
-
   ; go to next cursor location
   inc byte [y]
   mov byte [x], 0
+  ret
+ctrl_n:
+  inc byte [y]  ; next line
+  ret
+ctrl_p:
+  dec byte [y]  ; prev line
+  ret
+ctrl_q:
+  cmp byte [dirty], 0
+  je .really_quit   ; if clean, just quit
+  ; dirty, but if we hit ctrl-q 2x in a row, really quit
+  cmp al, [lastkey]
+  je .really_quit
+  ret
+.really_quit:
+  mov ch, 6
+  mov cl, 7
+  mov ah, 1
+  int 0x10  ; restore cursor
+  int 0x20  ; back to o/s
+ctrl_s:
+  call save_file
+  mov byte [dirty], 0
   ret
 
 printable:
@@ -201,15 +164,15 @@ printable:
   cmp al, 127
   jge notprintable
 
-  ; insert the char at al at the current cursorloc
-  ; TODO: and redraw the line from this x location to the EOL.
+  ; insert a char 
   call insert_char
 
-  ; write the character
+  ; store the character in al at the current cursorloc
   mov di, [cursorloc]
   mov [di], al
 
   ; NOTE: this is slow on hardware, but fast on DOSBox
+  ; Instead, redraw the line from this x location to the EOL.
   call draw_all
 
   ; go to next cursor location
@@ -223,32 +186,32 @@ notprintable:
 updatecursor:
   mov dl, [x] ; column
   cmp dl, 80
-  jl goodcursor1
+  jl .goodcursor1
   mov byte [x], 0
   inc byte [y]
   jmp updatecursor
 
-goodcursor1:
+.goodcursor1:
   cmp dl, 0xff
-  jne goodcursor2
+  jne .goodcursor2
   mov byte [x], 79
   dec byte [y]
   jmp updatecursor
 
-goodcursor2:
+.goodcursor2:
   mov dh, [y] ; row
   cmp dh, 0xff
-  jne goodcursor3
+  jne .goodcursor3
   mov byte [y], 0
   jmp updatecursor
 
-goodcursor3:
+.goodcursor3:
   cmp dh, 23
-  jle goodcursor4
+  jle .goodcursor4
   mov byte [y], 23
   jmp updatecursor
 
-goodcursor4:
+.goodcursor4:
   xor bx, bx
   mov ah, 2
   ; dl, dh already set
@@ -256,14 +219,12 @@ goodcursor4:
 
   call xy_to_offset
 
-  ; move to status line
-  mov ah, 2
+  ; write current character at lower right of status
   xor bx, bx
-  mov dl, 0 ; bottom left
+  mov dl, 79; bottom right
   mov dh, 24
+  mov ah, 2
   int 0x10
-
-  ; set character
   mov bl, 4  ; bright red (bh=0)
   mov al, cl   ; character to print
   mov cx, 1
@@ -338,6 +299,8 @@ draw_all:
   cmp al, 13 ; CR
   je .newline
 
+  mov di, 0   ; clear newline status
+
   ; put al at current location
   ; move to current location
   mov ah, 2
@@ -376,12 +339,15 @@ draw_all:
 
 .resetcol:
   inc si  ; skip LF
+  mov di, 1   ; indicates last was a crlf
   ; set cursor to start of next row
   mov dl, 0
   inc dh
   jmp .loop
 
 .done:
+  cmp di, 1
+  jne .notlf
   ; clear the next line (in case the # of lines is smaller)
   mov al, 0
   mov bh, 0
@@ -391,7 +357,7 @@ draw_all:
   mov bp, blankline
   mov ah, 0x13
   int 0x10
-
+.notlf:
   ret
 
 
@@ -424,9 +390,73 @@ get_text_end:
   dec di
   ret
 
+move_to_status:
+  xor bx, bx
+  mov dl, 0 ; bottom left
+  mov dh, 24
+  mov ah, 2
+  int 0x10
+  ret
+
+clear_text:
+  mov al, 0
+  mov cx, 1920
+  mov di, text
+  rep stosb   ;; WOOT!
+  ret
+
+get_filename:
+  call move_to_status
+
+  ; get filename
+  mov ah, 0x0a
+  mov dx, filename ; first byte is max size
+  int 0x21
+
+  xor bx, bx
+  mov bl, filename[1] ; second byte is actual size
+  mov filename[bx+2], bh ; set trailing 0
+  ret
+
+
+load_file:
+  call get_filename
+
+  ; open & read file
+  mov al, 0
+  mov dx, filenamedata
+  mov ah, 0x3d 
+  int 0x21
+  jc .load_error
+  mov bx, ax  ; stash file handle in bx
+
+  call clear_text
+
+  mov cx, 1920    ; maximum size
+  mov dx, text    ; destination
+  mov ah, 0x3f
+  int 0x21        ; read from file
+  jc .load_error
+
+  ; close file, handle still in bx
+  mov ah, 0x3e
+  int 0x21
+  jc .load_error
+  ret
+
+.load_error:
+  ; print an error
+  mov ah, 9
+  mov dx, load_error_msg
+  int 0x21
+  int 0x20   ; back to o/s
+
+
 save_file:
+  call get_filename
+
   xor cx, cx   ; 0=write normal file
-  mov dx, filename
+  mov dx, filenamedata
   mov ah, 0x3c
   int 0x21   ; open file for write, handle in ax
   jc .error
@@ -437,8 +467,8 @@ save_file:
 
   ; ax has file handle, needs to be in bx
   mov bx, ax
-  mov dx, text
-  mov ah, 0x40
+  mov dx, text  ; source
+  mov ah, 0x40  ; write to file
   int 0x21
   jc .error
 
@@ -449,20 +479,25 @@ save_file:
   ret
 
 .error:
+  ; print an error
+  mov ah, 9
+  mov dx, save_error_msg
+  int 0x21
+
   int 0x20   ; back to o/s
 
 
 segment .data
   TITLE: db "Smoled", 0
 
-  handlers: dw ctrl_nop, ctrl_a, ctrl_b, ctrl_nop, ctrl_d, ctrl_e, ctrl_f, ctrl_nop, ctrl_h, ctrl_nop, ctrl_nop, ctrl_nop, ctrl_nop, ctrl_m, ctrl_n, ctrl_nop, ctrl_p, ctrl_q, ctrl_nop, ctrl_s, ctrl_nop, ctrl_nop, ctrl_nop, ctrl_nop, ctrl_nop, ctrl_nop, ctrl_nop, ctrl_nop
+  handlers: dw ctrl_nop, ctrl_a, ctrl_b, ctrl_nop, ctrl_d, ctrl_e, ctrl_f, ctrl_nop, ctrl_h, ctrl_nop, ctrl_nop, ctrl_nop, ctrl_l, ctrl_m, ctrl_n, ctrl_nop, ctrl_p, ctrl_q, ctrl_nop, ctrl_s, ctrl_nop, ctrl_nop, ctrl_nop, ctrl_nop, ctrl_nop, ctrl_nop, ctrl_nop
 
   ; physical cursor location on screen
   x: db 0  ; 0-79
   y: db 0  ; 0-22
 
   ; what line of the file is the top line shown?
-  ; top: db 0 this will be for scrolling, not v1
+  ; top: db 0 ; this will be for scrolling, not v1
 
   dirty: db 0
 
@@ -472,29 +507,15 @@ segment .data
   ; absolute location of cursor in text
   cursorloc: dw 0
 
-  filename: db "SMOLED.TXT", 0 ; times 13 db 0	; 8.3
+  filename: db 80, 0   ; first byte is full size, second byte is (output) actual size
+  filenamedata: times 80 db 0
+
   blankline: times 80 db ' '
 
+  load_error_msg: db "load error $"
+  save_error_msg: db "save error $"
 
-  ; 24 lines x 80 rows, kind of draconian
-  ; text: times 1920 db 0
-  text: db "Four score and seven years ago our fathers brought forth on this continent.", 13, 10
-  text2: db "a new nation, conceived in Liberty,", 13, 10
-  text3: db "and dedicated to the proposition that", 13, 10
-  text4: db "all men are created equal.", 13, 10, 0
-  buffer: times 1000 db 0
-    ;"Now we are engaged in a great civil war, testing whether that nation, or any ", 13, \
-    ;"nation so conceived and so dedicated, can long endure. We are met on a great ", 13, \
-    ;"battle-field of that war. We have come to dedicate a portion of that field, ", 13, \
-    ;"as a final resting place for those who here gave their lives that that nation ", 13, \
-    ;"might live. It is altogether fitting and proper that we should do this.", 13, 13, \
-    ;"But, in a larger sense, we can not dedicate -- we can not consecrate -- we ", 13, \
-    ;"can not hallow -- this ground. The brave men, living and dead, who struggled ", 13, \
-    ;"here, have consecrated it, far above our poor power to add or detract. ", 13, \
-    ;"... It is rather for us to be here dedicated to the great task ", 13, \
-    ;"remaining before us -- that from these honored dead we take increased ", 13, \
-    ;"devotion to that cause for which they gave the last full measure of devotion ", 13, \
-    ;"-- that we here highly resolve that these dead shall not have died in vain -- ", 13, \
-    ;"that this nation, under God, shall have a new birth of freedom -- and that ", 13, \
-    ;"government of the people, by the people, for the people, shall not perish from ", 13, \
-    ;"the earth.", 13, 0
+segment .bss
+  ; Note, it doesn't even really need to be 1920 since we don't have any data past it,
+  ; but that's ok.
+  text: resb 1920 ; 1920=24 lines x 80 rows, the max file size for now

@@ -8,11 +8,11 @@ A very smol editor.
 
 or
 
-`tinyasm -f bin smoled.asm -o smoled.com`
+`tinyasm -f bin smoled.asm -o smoled.com` (doesn't work because tinyasm doesn't support .bss)
 
 ## Usage
 
-Run `somled.com`
+Run `smoled.com`
 
 Cursor keys:
 
