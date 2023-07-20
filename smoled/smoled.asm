@@ -392,12 +392,12 @@ get_filename:
 
   ; get filename
   mov ah, 0x0a
-  mov dx, filename ; first byte is max size
-  int 0x21
+  mov dx, filename_sizes ; first byte is max size
+  int 0x21   ; input
 
   xor bx, bx
-  mov bl, filename[1] ; second byte is actual size
-  mov filename[bx+2], bh ; set trailing 0
+  mov bl, filename_sizes[1] ; second byte is actual size
+  mov filename_sizes[bx+2], bh ; set trailing 0
   ret
 
 
@@ -406,7 +406,7 @@ load_file:
 
   ; open & read file
   mov al, 0
-  mov dx, filenamedata
+  mov dx, filename
   mov ah, 0x3d 
   int 0x21
   jc .load_error
@@ -438,13 +438,13 @@ load_file:
 
 
 save_file:
-  cmp byte filename[1], 0 ; is size already set?
+  cmp byte filename_sizes[1], 0 ; is size already set?
   jne .overwrite
   call get_filename ; no, get filename
 
 .overwrite
   xor cx, cx   ; 0=write normal file
-  mov dx, filenamedata
+  mov dx, filename
   mov ah, 0x3c
   int 0x21   ; open file for write, handle in ax
   jc .error
@@ -496,8 +496,8 @@ segment .data
   ; absolute location of cursor in text
   cursorloc: dw 0
 
-  filename: db 80, 0   ; first byte is full size, second byte is (output) actual size
-  filenamedata: times 80 db 0
+  filename_sizes: db 79, 0   ; first byte is full size, second byte (output) is actual size
+  filename: times 80 db 0
 
   blankline: times 80 db ' '
 
