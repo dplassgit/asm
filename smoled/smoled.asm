@@ -16,6 +16,9 @@
 org 0x0100
 
 TEXT_SIZE EQU 32767
+CR EQU 13
+LF EQU 10
+
 section .text
 
   ; Clear screen
@@ -43,14 +46,13 @@ section .text
 
   call clear_text
   ; insert CRLF because reasons
-  mov byte [text], 13
-  mov byte [text+1], 10
+  mov byte [text], CR
+  mov byte [text+1], LF
   mov byte [filename_sizes], 80
 
-  xor ax, ax
-  push ax  ; preset the lastkey to zero
+  push word 0 ; preset the lastkey to zero
 
-waiting:
+wait_for_key:
   ; update the cursor location on the screen
   mov dh, [y] ; row
   mov dl, [x] ; column
@@ -81,9 +83,11 @@ ctrl_a:
   mov byte [x], 0  ; beginning of line
 ctrl_nop:
   ret
+
 ctrl_b:
   dec byte [x]  ; back/prev char
   ret
+
 ctrl_d:
   ; if x < 80, do delete
   cmp byte [x], 79
@@ -92,12 +96,15 @@ ctrl_d:
   call backspace
 .done:
   ret
+
 ctrl_e:
   mov byte [x], 79 ; end of physical line
   ret
+
 ctrl_f:
   inc byte [x]  ; forward/next char
   ret
+
 ctrl_h:
   ; if x!=0 or y!=0, do backspace
   cmp byte [x], 0
@@ -110,26 +117,31 @@ ctrl_h:
   call backspace
   dec byte [x]
   ret
+
 ctrl_m:
   ; insert 13, 10
   call insert_char
   mov di, [cursorloc]
-  mov byte [di], 13
+  mov byte [di], CR
   call insert_char
   inc word [cursorloc]
   mov di, [cursorloc]
-  mov byte [di], 10
+  mov byte [di], LF
   call draw_all
+
   ; go to next cursor location
   inc byte [y]
   mov byte [x], 0
   ret
+
 ctrl_n:
   inc byte [y]  ; next line
   ret
+
 ctrl_p:
   dec byte [y]  ; prev line
   ret
+
 ctrl_q:
   cmp byte [dirty], 0
   je .really_quit   ; if clean, just quit
@@ -139,6 +151,7 @@ ctrl_q:
   ret
 .really_quit:
   int 0x20  ; back to o/s
+
 
 maybeprintable:
   ; detect if printable: if ascii 32 to 126
@@ -175,7 +188,7 @@ updatecursor:
   inc byte [y]
 
 .goodcursor1:
-  cmp dl, 0xff
+  cmp dl, 0xff  ; this is weird - shouldn't it be [x]?
   jne .goodcursor2
   ; column -1 - go back one row
   mov byte [x], 79
@@ -214,7 +227,7 @@ updatecursor:
   mov ah, 9
   int 0x10  ; write char and attribute
 
-  jmp waiting
+  jmp wait_for_key
 
 
 ; move from cursorloc to end of text back one
@@ -251,7 +264,7 @@ xy_to_offset:
   cmp cl, 0
   je .done  ; should be error, shrug.
 
-	cmp cl, 13 ; CR
+	cmp cl, CR
   je .newline
   inc dl ; next column
 
@@ -277,12 +290,13 @@ draw_all:
   xor dx, dx ; dh=row, dl=column
 
 .loop:
-  mov al, [si]  ; get next character
-  inc si
+  lodsb 
   cmp al, 0 ; eof
   je .done
-  cmp al, 13 ; CR
+  cmp al, CR
   je .newline
+
+  mov di, 0   ; clear newline status
 
   ; put al at current location
   ; move to current location
@@ -322,12 +336,16 @@ draw_all:
 
 .resetcol:
   inc si  ; skip LF
+  mov di, 1   ; indicates last was a crlf
   ; set cursor to start of next row
   mov dl, 0
   inc dh
   jmp .loop
 
 .done:
+  cmp di, 1
+  jne .notlf
+
   ; clear the next line (in case the # of lines is smaller)
   xor al, al
   xor bh, bh
@@ -338,6 +356,7 @@ draw_all:
   mov ah, 0x13
   int 0x10
 
+.notlf:
   ret
 
 
