@@ -6,6 +6,7 @@
 ; Issues/TODO:
 ;  overwrites status line if file has > 23 lines
 ;  when going down and the cursor is past end of line, weird things happen
+;  scrolling
 ;  BUG: no newline -> NO TEXT
 ;  delete/replace CRLF (only deletes the CR, not the LF, shrug. mostly works)
 ;  status line
@@ -14,6 +15,7 @@
 
 org 0x0100
 
+TEXT_SIZE EQU 32767
 section .text
 
   ; Clear screen
@@ -43,6 +45,7 @@ section .text
   ; insert CRLF because reasons
   mov byte [text], 13
   mov byte [text+1], 10
+  mov byte [filename_sizes], 80
 
   xor ax, ax
   push ax  ; preset the lastkey to zero
@@ -200,7 +203,7 @@ updatecursor:
   call xy_to_offset
 
   ; write current character at lower right of status
-  xor bx, bx
+  ;xor bx, bx
   mov dl, 79; bottom right
   mov dh, 24
   mov ah, 2
@@ -281,8 +284,6 @@ draw_all:
   cmp al, 13 ; CR
   je .newline
 
-  mov di, 0   ; clear newline status
-
   ; put al at current location
   ; move to current location
   mov ah, 2
@@ -321,33 +322,30 @@ draw_all:
 
 .resetcol:
   inc si  ; skip LF
-  mov di, 1   ; indicates last was a crlf
   ; set cursor to start of next row
   mov dl, 0
   inc dh
   jmp .loop
 
 .done:
-  cmp di, 1
-  jne .notlf
   ; clear the next line (in case the # of lines is smaller)
-  mov al, 0
-  mov bh, 0
+  xor al, al
+  xor bh, bh
   mov bl, 7
   mov cx, 80
-  mov dl, 0
+  xor dl, dl
   mov bp, blankline
   mov ah, 0x13
   int 0x10
-.notlf:
+
   ret
 
 
-; move everything down one byte so we can insert a character at the current location
+; Move everything down one byte so we can insert a character at the current location
 insert_char:
   mov byte [dirty], 1
   call get_text_end
-  ; di points at the zero at the end of text
+  ; di now points at the zero at the end of text
 
 ; surely this can be done with a loop, and don't call me Shirley
 .loop:
@@ -381,12 +379,13 @@ move_to_status:
   ret
 
 clear_text:
-  mov al, 0
-  mov cx, 1920
+  xor al, al
+  mov cx, TEXT_SIZE
   mov di, text
   rep stosb   ;; WOOT!
   ret
 
+; Puts the filename in 'filename'
 get_filename:
   call move_to_status
 
@@ -405,7 +404,7 @@ load_file:
   call get_filename
 
   ; open & read file
-  mov al, 0
+  xor al, al
   mov dx, filename
   mov ah, 0x3d 
   int 0x21
@@ -414,7 +413,7 @@ load_file:
 
   call clear_text
 
-  mov cx, 1920    ; maximum size
+  mov cx, TEXT_SIZE    ; maximum size
   mov dx, text    ; destination
   mov ah, 0x3f
   int 0x21        ; read from file
@@ -442,7 +441,7 @@ save_file:
   jne .overwrite
   call get_filename ; no, get filename
 
-.overwrite
+.overwrite:
   xor cx, cx   ; 0=write normal file
   mov dx, filename
   mov ah, 0x3c
@@ -464,6 +463,7 @@ save_file:
   mov ah, 0x3e
   int 0x21
   jc .error
+
   mov byte [dirty], 0
   ret
 
@@ -496,15 +496,15 @@ segment .data
   ; absolute location of cursor in text
   cursorloc: dw 0
 
-  filename_sizes: db 79, 0   ; first byte is full size, second byte (output) is actual size
-  filename: times 80 db 0
-
+  ; todo: get rid of this, save 80 bytes
   blankline: times 80 db ' '
 
-  load_error_msg: db "Load error $"
-  save_error_msg: db "Save error $"
+  load_error_msg: db "Load error$"
+  save_error_msg: db "Save error$"
+
 
 segment .bss
-  ; Note, it doesn't even really need to be 1920 since we don't have any data past it,
-  ; but that's ok.
-  text: resb 1920 ; 1920=24 lines x 80 rows, the max file size for now
+  filename_sizes: resb 2 ; db 79, 0   ; first byte is full size, second byte (output) is actual size
+  filename: resb 80 ; times 80 db 0
+
+  text: resb TEXT_SIZE
