@@ -178,45 +178,45 @@ maybeprintable:
 
 notprintable:
 
-; update cursor location
+; update cursor location: get from x, y into dl, dh, then update dl, dh and write back into x, y
 updatecursor:
   mov dl, [x] ; column
+  mov dh, [y] ; row
   cmp dl, 80
   jl .goodcursor1
   ; past end of row, go to next row
-  mov byte [x], 0
-  inc byte [y]
+  mov dl, 0
+  inc dh
 
 .goodcursor1:
   cmp dl, 0xff  ; this is weird - shouldn't it be [x]?
   jne .goodcursor2
   ; column -1 - go back one row
-  mov byte [x], 79
-  dec byte [y]
+  mov dl, 79
+  dec dh
 
 .goodcursor2:
-  mov dh, [y] ; row
   cmp dh, 0xff
   jne .goodcursor3
   ; row -1, go to row 0
-  mov byte [y], 0
+  mov dh, 0
 
 .goodcursor3:
   cmp dh, 23
   jle .goodcursor4
   ; > row 24, go to row 23.
-  mov byte [y], 23
+  mov dh, 23
 
 .goodcursor4:
+  mov [x], dl
+  mov [y], dh
   xor bx, bx
   mov ah, 2
-  ; dl, dh already set
   int 0x10   ; update the cursor location on the screen
 
   call xy_to_offset
 
   ; write current character at lower right of status
-  ;xor bx, bx
   mov dl, 79; bottom right
   mov dh, 24
   mov ah, 2
@@ -251,13 +251,15 @@ xy_to_offset:
 .loop:
   mov cl, [si] ; char = text[i]
   ;If tx==x and ty ==y	// x, y are globals representing our physical location. ooh, we might be able to deal with scrolling here
-  cmp dl, [x]
-  jne .nothere
   cmp dh, [y]
+  jne .nothere
+  ; TODO: if same line, but x > dl, move back to prevoius newline
+  cmp dl, [x]
   jne .nothere
 
   ; found it!
   mov [cursorloc], si
+.done:
   ret
 
 .nothere:
@@ -268,7 +270,7 @@ xy_to_offset:
   je .newline
   inc dl ; next column
 
-  cmp dl, 80 ; got to last column without a newline, reset 
+  cmp dl, 80 ; got to last column without a newline, reset
   je .newline
 
   jmp .next
@@ -280,8 +282,6 @@ xy_to_offset:
   inc si  ; next character in text
   jmp .loop
 
-.done:
-  ret
 
 
 ; draw the whole text starting at the top of the screen.
@@ -290,7 +290,7 @@ draw_all:
   xor dx, dx ; dh=row, dl=column
 
 .loop:
-  lodsb 
+  lodsb
   cmp al, 0 ; eof
   je .done
   cmp al, CR
@@ -425,7 +425,7 @@ load_file:
   ; open & read file
   xor al, al
   mov dx, filename
-  mov ah, 0x3d 
+  mov ah, 0x3d
   int 0x21
   jc .load_error
   mov bx, ax  ; stash file handle in bx
