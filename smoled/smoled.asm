@@ -216,6 +216,7 @@ updatecursor:
 
   call xy_to_offset
 
+%ifdef DEBUG
   ; write current character at lower right of status
   mov dl, 79; bottom right
   mov dh, 24
@@ -226,6 +227,7 @@ updatecursor:
   mov cx, 1
   mov ah, 9
   int 0x10  ; write char and attribute
+%endif
 
   jmp wait_for_key
 
