@@ -4,12 +4,12 @@
 
 
 ; Issues/TODO:
-;  overwrites status line if file has > 23 lines
 ;  when going down and the cursor is past end of line, weird things happen
 ;  scrolling
+;  overwrites status line if file has > 23 lines
 ;  BUG: no newline -> NO TEXT
-;  delete/replace CRLF (only deletes the CR, not the LF, shrug. mostly works)
 ;  status line
+;  delete/replace CRLF (only deletes the CR, not the LF, shrug. mostly works)
 ;  cursor keys BIOS code up 0x48 down 0x50 left 0x4b right 0x4d home 0x47 end 0x4f delete ???
 ;  overwrite mode; insert = BIOS code 0x52
 
@@ -48,7 +48,8 @@ section .text
   ; insert CRLF because reasons
   mov byte [text], CR
   mov byte [text+1], LF
-  mov byte [filename_sizes], 80
+  mov byte [filename_sizes], 79
+  mov byte filename_sizes[1], 0
 
   push word 0 ; preset the lastkey to zero
 
@@ -255,7 +256,8 @@ xy_to_offset:
   ;If tx==x and ty ==y	// x, y are globals representing our physical location. ooh, we might be able to deal with scrolling here
   cmp dh, [y]
   jne .nothere
-  ; TODO: if same line, but x > dl, move back to prevoius newline
+  ; if we gethere, dh=y
+  ; TODO: if next line, or same line and x > dl, move back to prevoius newline
   cmp dl, [x]
   jne .nothere
 
@@ -377,7 +379,6 @@ insert_char:
   jne .loop
 
   ret
-
 
 ; calculate the end of text, returned in di
 ; TODO: cache this and only change it when a character is inserted or deleted
