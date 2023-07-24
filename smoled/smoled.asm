@@ -1,10 +1,10 @@
 ; to build:
 ; nasm -fbin smoled.asm -o smoled.com
-; tinyasm -f bin smoled.asm -o smoled.com <<< doesn't work anymore.
 
 
 ; Issues/TODO:
 ;  when going down and the cursor is past end of line, weird things happen
+;  issues deleting the last CRLF?
 ;  scrolling
 ;  overwrites status line if file has > 23 lines
 ;  BUG: no newline -> NO TEXT
@@ -40,10 +40,6 @@ section .text
   mov ah, 0x13
   int 0x10
 
-  ; Set initial cursor location to start of text
-  mov di, text
-  mov [cursorloc], di
-
   call clear_text
   ; insert CRLF because reasons
   mov byte [text], CR
@@ -51,9 +47,18 @@ section .text
   mov byte [filename_sizes], 79
   mov byte filename_sizes[1], 0
 
+  ; Set initial cursor location to start of text
+  call set_initial_cursor_loc
+
   push word 0 ; preset the lastkey to zero
 
 wait_for_key:
+%ifdef DEBUG
+  ;mov bl, 52
+  ;mov cx, [text_end]
+  ;call printcx
+%endif
+
   ; update the cursor location on the screen
   mov dh, [y] ; row
   mov dl, [x] ; column
@@ -91,8 +96,8 @@ ctrl_b:
 
 ctrl_d:
   ; if x < 80, do delete
-  cmp byte [x], 79
-  je .done
+  cmp byte [x], 80
+  jge .done
   inc word [cursorloc]
   call backspace
 .done:
@@ -237,6 +242,7 @@ updatecursor:
 backspace:
   mov byte [dirty], 1
   mov di, [cursorloc]
+  dec word [text_end]
 .loop:
   mov cl, [di]
   mov [di-1], cl
@@ -287,6 +293,11 @@ xy_to_offset:
   jmp .loop
 
 
+set_initial_cursor_loc:
+  mov di, text
+  mov [cursorloc], di
+  call set_text_end
+  ret
 
 ; draw the whole text starting at the top of the screen.
 draw_all:
@@ -367,7 +378,9 @@ draw_all:
 ; Move everything down one byte so we can insert a character at the current location
 insert_char:
   mov byte [dirty], 1
-  call get_text_end
+  mov di, [text_end]
+  inc word [text_end]
+
   ; di now points at the zero at the end of text
 
 ; surely this can be done with a loop, and don't call me Shirley
@@ -380,9 +393,8 @@ insert_char:
 
   ret
 
-; calculate the end of text, returned in di
-; TODO: cache this and only change it when a character is inserted or deleted
-get_text_end:
+; calculate the end of text, and set it into text_end
+set_text_end:
   mov di, text
 .loop:
   mov cl, [di]
@@ -390,6 +402,7 @@ get_text_end:
   cmp cl, 0
   jne .loop
   dec di
+  mov [text_end], di
   ret
 
 move_to_status:
@@ -447,6 +460,7 @@ load_file:
   jc .load_error
 
   mov byte [dirty], 0
+  call set_initial_cursor_loc
   call draw_all
   ret
 
@@ -470,7 +484,7 @@ save_file:
   int 0x21   ; open file for write, handle in ax
   jc .error
 
-  call get_text_end
+  mov di, [text_end]
   sub di, text  ; subtract start of text
   mov cx, di   ; length in cx
 
@@ -498,7 +512,74 @@ save_file:
   int 0x20   ; back to o/s
 
 
+; prints cx at column bl
+%ifdef DEBUG
+printcx:
+  push ax
+  push bx
+  push dx
+
+  ; move to second location
+  mov dl, bl
+  xor bx, bx
+  mov dh, 24
+  mov ah, 2
+  int 0x10
+  call printcl
+
+  ; move to first location for high byte
+  sub dl, 2
+  int 0x10
+  mov cl, ch
+  call printcl
+
+  pop dx
+  pop bx
+  pop ax
+  ret
+
+
+; prints cl at the current location
+printcl:
+  push ax
+  push bx
+  push cx
+
+  ; INT 10h / AH = 0Eh - teletype output.
+  ; do 1 nibble at a time
+  ; high nibble:
+  mov bl, cl
+  mov bh, 0
+  and bl, 0xf0
+  shr bl, 4
+  mov al, hexchars[bx]
+  ; AL = character to display.
+  mov ah, 0x0e
+  int 0x10
+
+  ; INT 10h / AH = 0Eh - teletype output.
+  ; do 1 nibble at a time
+  ; high nibble:
+  mov bl, cl
+  and bl, 0x0f
+  mov bh, 0
+  mov al, hexchars[bx]
+  ; AL = character to display.
+  int 0x10
+
+  pop cx
+  pop bx
+  pop ax
+  ret
+
+%endif
+
+
 segment .data
+%ifdef DEBUG
+  hexchars: db "0123456789abcdef"
+%endif
+
   TITLE: db "Smoled", 0
 
   handlers: dw ctrl_nop, ctrl_a, ctrl_b, ctrl_nop, ctrl_d, ctrl_e, ctrl_f, ctrl_nop, ctrl_h, ctrl_nop, ctrl_nop, ctrl_nop, load_file, ctrl_m, ctrl_n, ctrl_nop, ctrl_p, ctrl_q, ctrl_nop, save_file, ctrl_nop, ctrl_nop, ctrl_nop, ctrl_nop, ctrl_nop, ctrl_nop, ctrl_nop
@@ -512,21 +593,22 @@ segment .data
 
   dirty: db 0
 
-  ; last key hit
-  lastkey: db 0
-
-  ; absolute location of cursor in text
-  cursorloc: dw 0
-
   ; todo: get rid of this, save 80 bytes
   blankline: times 80 db ' '
 
   load_error_msg: db "Load error$"
   save_error_msg: db "Save error$"
 
-
 segment .bss
-  filename_sizes: resb 2 ; db 79, 0   ; first byte is full size, second byte (output) is actual size
-  filename: resb 80 ; times 80 db 0
+  ; last key hit
+  lastkey: resb 1
+
+  ; absolute location of cursor in text
+  cursorloc: resb 2
+
+  text_end: resb 2 ; location of end of text.
+
+  filename_sizes: resb 2 ; first byte is full size, second byte (output) is actual size
+  filename: resb 80
 
   text: resb TEXT_SIZE
