@@ -3,8 +3,7 @@
 
 
 ; Issues/TODO:
-;  when going down and the cursor is past end of line, weird things happen
-;  issues deleting the last CRLF?
+;  issue when going to the EOF (with no trailing CRLF) and insert a char -> crash
 ;  scrolling
 ;  overwrites status line if file has > 23 lines
 ;  BUG: no newline -> NO TEXT
@@ -83,7 +82,7 @@ ctrl_something:
   mov bl, al
   shl bx, 1
   call handlers[bx]
-  jmp updatecursor
+  jmp updatecursor ; tail call
 
 ctrl_a:
   mov byte [x], 0  ; beginning of line
@@ -221,6 +220,17 @@ updatecursor:
   int 0x10   ; update the cursor location on the screen
 
   call xy_to_offset
+%ifdef DEBUG
+  push cx
+  mov ch, 0
+  mov bx, 20
+  call printcx
+
+  mov cx, [cursorloc]
+  mov bl, 30
+  call printcx
+  pop cx
+%endif
 
 %ifdef DEBUG
   ; write current character at lower right of status
@@ -250,54 +260,73 @@ backspace:
   ; surely this can be done with a loop, and don't call me Shirley
   cmp cl, 0
   jne .loop
-  call draw_all
-  ret
+  jmp draw_all
+
 
 ; Sets cursorloc and cl to the value at cursorloc
 xy_to_offset:
-  xor dx, dx  ; dl=x, dh=y
+  xor dx, dx
   mov si, text
 .loop:
-  mov cl, [si] ; char = text[i]
-  ;If tx==x and ty ==y	// x, y are globals representing our physical location. ooh, we might be able to deal with scrolling here
-  cmp dh, [y]
-  jne .nothere
-  ; if we gethere, dh=y
-  ; TODO: if next line, or same line and x > dl, move back to prevoius newline
-  cmp dl, [x]
-  jne .nothere
+  mov cl, [si]
+  cmp cl, 0
+  je .badend
 
-  ; found it!
+  cmp dh, [y]
+  jne .maybeendofline
+
+  ;; right row; look for x
+  xor dl, dl
+.xloop:
+  mov cl, [si]
+  cmp dl, [x]
+  je .foundcolumn
+
+  cmp cl, 0
+  je .foundcolumn  ; haven't found before end of text, set to end of text.
+  cmp cl, CR
+  je .foundcolumn  ; haven't found befeore end of line, set to end of line.
+  inc si
+  inc dl
+  jmp .xloop
+
+.foundcolumn:
   mov [cursorloc], si
-.done:
+  mov [x], dl ; update x location
   ret
 
-.nothere:
-  cmp cl, 0
-  je .done  ; should be error, shrug.
-
-	cmp cl, CR
+.maybeendofline:
+  cmp cl, CR
   je .newline
-  inc dl ; next column
-
-  cmp dl, 80 ; got to last column without a newline, reset
-  je .newline
-
-  jmp .next
+  cmp dl, 80
+  jne .nextcolumn
 .newline:
-  inc si  ; skip LF
-	mov dl, 0 ; clear column
-	inc dh    ; next line
-.next:
-  inc si  ; next character in text
+  inc dh
+  cmp dl, 80
+  je .clearcolumn
+  inc si ; skip past the LF
+.clearcolumn:
+  mov dl, 0
+  jmp .nextsi
+
+.nextcolumn:
+  inc dl
+.nextsi:
+  inc si
   jmp .loop
+
+.badend:
+  mov [cursorloc], si
+  ; set x, y to end of file (?)
+  mov [x], dl ; update x location
+  mov [y], dh ; end of file
+  ret
 
 
 set_initial_cursor_loc:
   mov di, text
   mov [cursorloc], di
-  call set_text_end
-  ret
+  jmp set_text_end   ; tail call
 
 ; draw the whole text starting at the top of the screen.
 draw_all:
@@ -395,6 +424,7 @@ insert_char:
 
 ; calculate the end of text, and set it into text_end
 set_text_end:
+  ; remarkably, this isn't smaller if a rep scasb is used
   mov di, text
 .loop:
   mov cl, [di]
@@ -403,14 +433,6 @@ set_text_end:
   jne .loop
   dec di
   mov [text_end], di
-  ret
-
-move_to_status:
-  xor bx, bx
-  mov dl, 0 ; bottom left
-  mov dh, 24
-  mov ah, 2
-  int 0x10
   ret
 
 clear_text:
@@ -422,7 +444,12 @@ clear_text:
 
 ; Puts the filename in 'filename'
 get_filename:
-  call move_to_status
+  ; move_to_status:
+  xor bx, bx
+  mov dl, 0 ; bottom left
+  mov dh, 24
+  mov ah, 2
+  int 0x10
 
   ; get filename
   mov ah, 0x0a
@@ -461,8 +488,7 @@ load_file:
 
   mov byte [dirty], 0
   call set_initial_cursor_loc
-  call draw_all
-  ret
+  jmp draw_all   ; tail call
 
 .load_error:
   ; print an error

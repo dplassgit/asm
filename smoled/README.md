@@ -2,17 +2,22 @@
 
 A very smol editor.
 
+
 ## Building
 
 `nasm -fbin smoled.asm -o smoled.com`
 
 or
 
-`tinyasm -f bin smoled.asm -o smoled.com` (doesn't work because tinyasm doesn't support .bss)
+`bazel build :smoledcom`
 
-## Usage
 
-Run `smoled.com`
+## Running
+
+Run `smoled.com` (or `bazel-bin/smoled/smoled.com`)
+
+
+## Editing
 
 Cursor keys:
 
@@ -24,8 +29,13 @@ Right: ctrl+f
 Start of line: ctrl+a
 End of line: ctrl+e
 Quit: ctrl+q (twice, if dirty)
-Save: ctrl+s (always saves to SMOLED.TXT for now)
+Load: ctrl+l
+Save: ctrl+s
 Delete: ctrl+d (not "Del" key)
 ```
 
+## Debugging
 
+Build with `-dDEBUG` for some additional status-line output.
+
+Or, `bazel build :smoledcomdebug`, which builds `smoledb.com`.
