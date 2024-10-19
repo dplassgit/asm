@@ -3,6 +3,7 @@
 
 
 ; Issues/TODO:
+;  VERY SLOW ON HARDWARE
 ;  issue when going to the EOF (with no trailing CRLF) and insert a char -> crash
 ;  scrolling
 ;  overwrites status line if file has > 23 lines
@@ -20,26 +21,9 @@ LF EQU 10
 
 section .text
 
-  ; Clear screen
-  mov al, 0
-  mov ah, 6   ; 0x06 is scroll; al=0 = clear screen
-  mov bh, 7   ; attribute 7=regular white
-  xor cx, cx  ; cl,ch=window upper left corner
   mov dh, 24  ; dl,dh=window lower right corner
-  mov dl, 79
-  int 0x10
+  call clear
 
-  ; write the title
-  mov bh, 0
-  mov bl, 15   ; attribute: bright white
-  mov cx, 7    ; length
-  mov dl, 37   ; dl, dh are column, row
-  mov dh, 24
-  mov bp, TITLE
-  mov ah, 0x13
-  int 0x10
-
-  call clear_text
   ; insert CRLF because reasons
   mov byte [text], CR
   mov byte [text+1], LF
@@ -260,7 +244,7 @@ backspace:
   ; surely this can be done with a loop, and don't call me Shirley
   cmp cl, 0
   jne .loop
-  jmp draw_all
+  jmp draw_all   ; tail call
 
 
 ; Sets cursorloc and cl to the value at cursorloc
@@ -280,8 +264,7 @@ xy_to_offset:
 .xloop:
   mov cl, [si]
   cmp dl, [x]
-  je .foundcolumn
-
+  je .foundcolumn  ; right column!
   cmp cl, 0
   je .foundcolumn  ; haven't found before end of text, set to end of text.
   cmp cl, CR
@@ -322,11 +305,6 @@ xy_to_offset:
   mov [y], dh ; end of file
   ret
 
-
-set_initial_cursor_loc:
-  mov di, text
-  mov [cursorloc], di
-  jmp set_text_end   ; tail call
 
 ; draw the whole text starting at the top of the screen.
 draw_all:
@@ -422,6 +400,11 @@ insert_char:
 
   ret
 
+set_initial_cursor_loc:
+  mov di, text
+  mov [cursorloc], di
+  ; fall through: call set_text_end
+
 ; calculate the end of text, and set it into text_end
 set_text_end:
   ; remarkably, this isn't smaller if a rep scasb is used
@@ -434,6 +417,25 @@ set_text_end:
   dec di
   mov [text_end], di
   ret
+
+clear:
+  ; Clear screen
+  mov al, 0
+  mov ah, 6   ; 0x06 is scroll; al=0 = clear screen
+  mov bh, 7   ; attribute 7=regular white
+  xor cx, cx  ; cl,ch=window upper left corner
+  mov dl, 79
+  int 0x10
+
+  ; write the title
+  mov bh, 0
+  mov bl, 15   ; attribute: bright white
+  mov cx, 7    ; length
+  mov dl, 37   ; dl, dh are column, row
+  mov dh, 24
+  mov bp, TITLE
+  mov ah, 0x13
+  int 0x10
 
 clear_text:
   xor al, al
@@ -473,7 +475,10 @@ load_file:
   jc .load_error
   mov bx, ax  ; stash file handle in bx
 
-  call clear_text
+  push bx
+  mov dh, 23  ; dl,dh=window lower right corner
+  call clear
+  pop bx
 
   mov cx, TEXT_SIZE    ; maximum size
   mov dx, text    ; destination
